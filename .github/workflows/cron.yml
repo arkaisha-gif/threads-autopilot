@@ -1,0 +1,31 @@
+name: Threads Autopilot Runner
+
+on:
+  schedule:
+    # Berjalan otomatis setiap 20 menit sekali di server GitHub
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # Memungkinkan tombol 'Run workflow' manual kapan saja
+
+jobs:
+  run-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Threads Worker
+        env:
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GCP_CREDS_BASE64: ${{ secrets.GCP_CREDS_BASE64 }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: |
+          python worker.py
