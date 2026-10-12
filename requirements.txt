@@ -1,0 +1,8 @@
+streamlit
+pandas
+requests
+pytz
+gspread
+google-auth
+python-dotenv
+pyarrow
