@@ -34,6 +34,14 @@ def get_secret(key, default=""):
 SPREADSHEET_ID = get_secret("SPREADSHEET_ID", "12HI63liR64ugPz8IHQHy2gAhOOzSDMt0D0-YHO5x08E")
 GCP_CREDS_BASE64 = get_secret("GCP_CREDS_BASE64")
 
+def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
+    if not text:
+        return ""
+    text_str = str(text).strip()
+    if len(text_str) > max_chars:
+        return text_str[:max_chars - 3].rstrip() + "..."
+    return text_str
+
 def get_sheets_client():
     raw_creds = str(GCP_CREDS_BASE64).strip() if GCP_CREDS_BASE64 else ""
     if not raw_creds:
@@ -86,7 +94,7 @@ def create_single_media_container(user_id: str, access_token: str, media_url: st
         params["is_carousel_item"] = "true"
     else:
         if text:
-            params["text"] = text
+            params["text"] = sanitize_threads_text(text)
         if reply_to_id:
             params["reply_to_id"] = reply_to_id
 
@@ -96,6 +104,7 @@ def create_single_media_container(user_id: str, access_token: str, media_url: st
     return res["id"]
 
 def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: str = "", reply_to_id: str = "") -> str:
+    text = sanitize_threads_text(text)
     media_list = [m.strip() for m in str(media_raw).split(",") if m.strip()]
     container_id = ""
 
@@ -220,7 +229,8 @@ def run_worker():
                 replies = [rep.strip() for rep in reply_chain_text.split("---REPLY---") if rep.strip()]
                 for rep_item in replies:
                     time.sleep(3)
-                    rep_id = publish_threads_post(u_id, tok, text=rep_item, media_raw="", reply_to_id=current_parent)
+                    safe_reply = sanitize_threads_text(rep_item)
+                    rep_id = publish_threads_post(u_id, tok, text=safe_reply, media_raw="", reply_to_id=current_parent)
                     current_parent = rep_id
                     print(f"[ROW {idx}] Balasan terbit: {rep_id}")
 
