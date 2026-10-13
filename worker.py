@@ -61,9 +61,10 @@ def get_sheets_client():
     )
     return gspread.authorize(creds)
 
-def wait_for_container(container_id: str, access_token: str, max_wait: int = 120) -> bool:
+def wait_for_container(container_id: str, access_token: str, max_wait: int = 150) -> bool:
     url = f"https://graph.threads.net/v1.0/{container_id}?fields=status,error_message&access_token={access_token}"
     start = time.time()
+    time.sleep(3)  # Jeda awal agar server Meta mendaftarkan ID kontainer
     while time.time() - start < max_wait:
         try:
             res = requests.get(url, timeout=15).json()
@@ -75,7 +76,7 @@ def wait_for_container(container_id: str, access_token: str, max_wait: int = 120
                 return False
         except Exception as e:
             print(f"[POLL RETRY] {e}")
-        time.sleep(5)
+        time.sleep(4)
     return False
 
 def create_single_media_container(user_id: str, access_token: str, media_url: str, text: str = "", is_carousel_item: bool = False, reply_to_id: str = "") -> str:
@@ -112,9 +113,9 @@ def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: 
         child_ids = []
         for m_url in media_list:
             c_id = create_single_media_container(user_id, access_token, m_url, is_carousel_item=True)
-            if any(m_url.lower().endswith(ext) for ext in [".mp4", ".mov", ".m4v"]) or "/video/upload/" in m_url:
-                if not wait_for_container(c_id, access_token):
-                    raise Exception(f"Video carousel item {c_id} gagal diproses Threads")
+            # Wajib tunggu tiap media anak selesai diproses Meta
+            if not wait_for_container(c_id, access_token):
+                raise Exception(f"Media carousel item {c_id} belum siap diproses Meta")
             child_ids.append(c_id)
 
         car_params = {
@@ -131,12 +132,15 @@ def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: 
             raise Exception(f"Gagal buat container carousel: {car_res}")
         container_id = car_res["id"]
 
+        # KUNCI PERBAIKAN: Tunggu sampai kontainer carousel induk FINISHED
+        if not wait_for_container(container_id, access_token):
+            raise Exception(f"Container carousel {container_id} belum siap (status != FINISHED)")
+
     elif len(media_list) == 1:
         m_url = media_list[0]
         container_id = create_single_media_container(user_id, access_token, m_url, text=text, reply_to_id=reply_to_id)
-        if any(m_url.lower().endswith(ext) for ext in [".mp4", ".mov", ".m4v"]) or "/video/upload/" in m_url:
-            if not wait_for_container(container_id, access_token):
-                raise Exception(f"Video {container_id} gagal diproses Threads")
+        if not wait_for_container(container_id, access_token):
+            raise Exception(f"Container media {container_id} belum siap (status != FINISHED)")
     else:
         text_params = {
             "media_type": "TEXT",
@@ -149,12 +153,30 @@ def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: 
         if "id" not in res:
             raise Exception(f"Gagal buat text container: {res}")
         container_id = res["id"]
+        time.sleep(2)
 
+    # Eksekusi Publish dengan Auto-Retry (mencegah error 24 / subcode 4279009)
     pub_url = f"https://graph.threads.net/v1.0/{user_id}/threads_publish"
-    pub_res = requests.post(pub_url, data={"creation_id": container_id, "access_token": access_token}, timeout=30).json()
-    if "id" not in pub_res:
-        raise Exception(f"Gagal publish container {container_id}: {pub_res}")
-    return pub_res["id"]
+    pub_res = {}
+    for attempt in range(5):
+        time.sleep(3)
+        r = requests.post(pub_url, data={"creation_id": container_id, "access_token": access_token}, timeout=30)
+        pub_res = r.json()
+        if "id" in pub_res:
+            return pub_res["id"]
+
+        err = pub_res.get("error", {})
+        err_sub = err.get("error_subcode")
+        err_msg = str(err.get("message", ""))
+        
+        # Jika server Meta masih memproses replikasi data
+        if err_sub == 4279009 or "does not exist" in err_msg.lower():
+            print(f"[RETRY PUBLISH {attempt + 1}/5] Server Meta sedang merakit container {container_id}, jeda 6 detik...")
+            time.sleep(6)
+        else:
+            break
+
+    raise Exception(f"Gagal publish container {container_id}: {pub_res}")
 
 def run_worker():
     print(f"[{datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')} WIB] Memeriksa jadwal posting antrean...")
