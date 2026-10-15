@@ -81,14 +81,14 @@ PANDUAN STRUKTUR & GAYA HOOK 1-3 DETIK:
 """
 
 VIRAL_HOOK_PATTERNS = [
-    "Trigger Drama Relasi (Pasangan/Mertua): Awali baris pertama dengan dialog/reaksi pasangan atau mertua huruf kapital.",
-    "Trigger Nyaris Malu (Social Anxiety): Awali baris pertama dengan momen horor/panik di tempat umum huruf kapital.",
-    "Trigger Otoritas/Orang Dalam: Awali baris pertama dengan ucapan terima kasih huruf kapital ke dokter/ahli yang kasih bocoran.",
-    "Trigger Kaum Mager/Satset: Awali baris pertama dengan pengakuan malas huruf kapital tapi nemu jalan pintas.",
-    "Trigger Satisfying/Sensorik: Awali baris pertama dengan kepuasan visual/suara huruf kapital.",
-    "Trigger Parno/Micro-Anxiety: Awali baris pertama dengan rasa cemas/jijik huruf kapital.",
-    "Trigger Terlambat Sadar (Umur): Awali baris pertama dengan keheranan kenapa baru tahu barang ini sekarang.",
-    "Trigger Skeptis Berujung Tobat: Awali baris pertama dengan mengira awalnya cuma gimik iklan huruf kapital."
+    "Trigger Drama Relasi (Pasangan/Mertua): Awali baris pertama dengan dialog/reaksi pasangan atau mertua huruf kapital (misal: 'SUAMI: KAMU KALAU NYUCI KOK RIBET BANGET? 😭😂').",
+    "Trigger Nyaris Malu (Social Anxiety): Awali baris pertama dengan momen horor/panik di tempat umum huruf kapital (misal: 'HAMPIR MALU DI RUANG MEETING KANTOR GARA-GARA BASKET 😭💀').",
+    "Trigger Otoritas/Orang Dalam: Awali baris pertama dengan ucapan terima kasih huruf kapital ke dokter/ahli yang kasih bocoran (misal: 'MAKASIH MBAK DOKTER YANG UDAH KASI TAU INI 😭🙏').",
+    "Trigger Kaum Mager/Satset: Awali baris pertama dengan pengakuan malas huruf kapital tapi nemu jalan pintas (misal: 'SEBAGAI ORANG YANG PALING MALES NYIKAT KAMAR MANDI... 🤣').",
+    "Trigger Satisfying/Sensorik: Awali baris pertama dengan kepuasan visual/suara huruf kapital (misal: 'THERAPY TERBAIK MINGGU INI: LIAT AIR RENDAMAN JADI BUTEK COKLAT 🤤😭').",
+    "Trigger Parno/Micro-Anxiety: Awali baris pertama dengan rasa cemas/jijik huruf kapital (misal: 'PARNO TIAP LIAT KECOA MUNCUL DARI BAWAH KITCHEN SET 😭').",
+    "Trigger Terlambat Sadar (Umur): Awali baris pertama dengan keheranan kenapa baru tahu barang ini sekarang (misal: 'UMUR 27 TAHUN BARU SADAR BENDA KECIL INI NYELAMATIN PUNGGUNG 😭').",
+    "Trigger Skeptis Berujung Tobat: Awali baris pertama dengan mengira awalnya cuma gimik iklan huruf kapital (misal: 'KIRAIN CUMA GIMIK IKLAN LEBAY, TERNYATA EMANG SESAKTI ITU 😭')."
 ]
 
 CLOSING_NARRATIVES = [
@@ -97,7 +97,11 @@ CLOSING_NARRATIVES = [
     "Yang mau samaan atau sekadar cek review pembeli lainnya, langsung kepoin di sini:",
     "Spill link belinya di sini ya guys, kemarin pas aku cek lagi ada diskon lumayan:",
     "Daripada ribet nyari tokonya satu-satu, langsung meluncur ke toko resminya di sini:",
-    "Kalo mau checkout mending sekarang sebelum kehabisan stok, link belinya di sini:"
+    "Kalo mau checkout mending sekarang sebelum kehabisan stok, link belinya di sini:",
+    "Kemarin dapet harga flash sale di toko ini dan pengirimannya cepet, linknya:",
+    "Biar dapet garansi resmi dan barang original, belinya lewat link ini ya:",
+    "Buat yang minta spill racunnya, ini link toko terpercaya yang sering aku pake:",
+    "Yang mau CO taro keranjang dulu aja, mumpung vouchernya masih aktif di sini:"
 ]
 
 def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
@@ -111,22 +115,62 @@ def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
 def call_gemini(prompt: str) -> str:
     key = str(AI_API_KEY).strip().replace("'", "").replace('"', "") if AI_API_KEY else ""
     if not key:
-        return "Rekomendasi barang praktis yang wajib punya buat sehari-hari."
-    
-    models_to_try = [
-        ("v1beta", "gemini-1.5-flash"),
-        ("v1", "gemini-1.5-flash"),
-        ("v1beta", "gemini-2.0-flash"),
-        ("v1", "gemini-1.5-pro")
-    ]
-    for ver, m_name in models_to_try:
+        print("[GEMINI ERROR] AI_API_KEY kosong atau belum terbaca dari Secrets/Environment!")
+        return "Rekomendasi barang praktis yang ngebantu banget aktivitas harian."
+
+    available_pairs = []
+    for ver in ["v1", "v1beta"]:
+        list_url = f"https://generativelanguage.googleapis.com/{ver}/models?key={key}"
+        try:
+            r = requests.get(list_url, timeout=10).json()
+            if "models" in r:
+                for m in r["models"]:
+                    if "generateContent" in m.get("supportedGenerationMethods", []):
+                        available_pairs.append((ver, m["name"].replace("models/", "")))
+        except Exception:
+            pass
+
+    preferred = ["1.5-flash", "2.0-flash", "flash", "1.5-pro", "gemini-pro"]
+    def get_rank(pair):
+        v, n = pair
+        for idx, pref in enumerate(preferred):
+            if pref in n.lower():
+                return idx
+        return 99
+
+    available_pairs.sort(key=get_rank)
+
+    for ver, m_name in available_pairs:
         url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
         try:
-            r = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=25).json()
-            if "candidates" in r and r["candidates"]:
-                return r["candidates"][0]["content"]["parts"][0]["text"].strip()
+            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30).json()
+            if "candidates" in res and res["candidates"]:
+                text_out = res["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if text_out:
+                    return text_out
+            elif "error" in res:
+                print(f"[GEMINI REJECTED] {m_name}: {res['error'].get('message')}")
+        except Exception as e:
+            print(f"[GEMINI RETRY] {e}")
+
+    fallback_models = [
+        ("v1", "gemini-1.5-flash"),
+        ("v1", "gemini-1.5-pro"),
+        ("v1beta", "gemini-1.5-flash"),
+        ("v1beta", "gemini-2.0-flash"),
+    ]
+    for ver, m_name in fallback_models:
+        url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
+        try:
+            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30).json()
+            if "candidates" in res and res["candidates"]:
+                text_out = res["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if text_out:
+                    return text_out
         except Exception:
-            continue
+            pass
+
+    print("[GEMINI FAILED] Seluruh percobaan model gagal. Menggunakan fallback.")
     return "Rekomendasi barang praktis yang ngebantu banget aktivitas harian."
 
 def generate_slots(total_count, start_time_str="08:15", end_time_str="21:30"):
@@ -194,7 +238,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     data_ws = sh.worksheet("data")
     existing_rows = data_ws.get_all_values()
 
-    # Cek apakah postingan untuk hari ini sudah pernah dibuat
     has_today_posts = False
     if len(existing_rows) > 1:
         for r in existing_rows[1:]:
@@ -211,7 +254,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     cfg_rows = cfg_ws.get_all_values()
     cfg_data = {r[0].strip(): r[1].strip() for r in cfg_rows if len(r) >= 2 and r[0].strip()}
 
-    # Cek rentang tanggal aktif
     try:
         start_str = cfg_data.get("start_datetime", "2026-01-01 00:00").replace("'", "")
         end_str = cfg_data.get("end_datetime", "2026-12-31 23:59").replace("'", "")
@@ -258,7 +300,12 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
             if p_type == "viral":
                 cat = random.choice(list(TOPIC_PILLARS.keys()))
                 sub_top = random.choice(TOPIC_PILLARS[cat])
-                p_text = call_gemini(f"Tulis 1 postingan Threads bahasa Indonesia tentang: '{sub_top}'.\n{PROMPT_RULES_CLEAN}\nMaksimal 220 karakter tanpa kutip.")
+                prompt_v = (
+                    f"Tulis 1 postingan Threads bahasa Indonesia tentang: '{sub_top}'.\n"
+                    f"{PROMPT_RULES_CLEAN}\n"
+                    f"Maksimal 220 karakter tanpa tanda kutip."
+                )
+                p_text = call_gemini(prompt_v)
                 new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(p_text), "", "", "", "PENDING", "", "", "", ""])
 
             elif p_type == "video":
@@ -266,9 +313,11 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                 v_i += 1
                 hook = random.choice(VIRAL_HOOK_PATTERNS)
                 prompt = (
-                    f"Tulis 1 postingan Threads bahasa Indonesia penahan jempol penonton video untuk produk: '{p_cur['product_name']}' "
-                    f"(Keunggulan: {p_cur.get('highlight', '')}). Formula Hook: {hook}.\n{PROMPT_RULES_CLEAN}\n"
-                    f"Baris 1 WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 emoji. Maksimal 300 karakter."
+                    f"Tulis 1 postingan Threads bahasa Indonesia penahan jempol (stop scrolling) penonton video untuk produk: '{p_cur['product_name']}' "
+                    f"(Keunggulan: {p_cur.get('highlight', '')}).\n"
+                    f"- Formula Hook: {hook}\n"
+                    f"{PROMPT_RULES_CLEAN}\n"
+                    f"Baris 1 WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 emoji penahan jempol dalam 1-3 detik. Maksimal 300 karakter tanpa tanda kutip."
                 )
                 main_txt = call_gemini(prompt)
                 closing = random.choice(CLOSING_NARRATIVES)
@@ -282,8 +331,10 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                 hook = random.choice(VIRAL_HOOK_PATTERNS)
                 prompt = (
                     f"Tulis 1 postingan Threads bahasa Indonesia rekomendasi produk: '{p_cur['product_name']}' "
-                    f"(Keunggulan: {p_cur.get('highlight', '')}). Formula Hook: {hook}.\n{PROMPT_RULES_CLEAN}\n"
-                    f"Baris 1 WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 emoji. Maksimal 300 karakter."
+                    f"(Keunggulan: {p_cur.get('highlight', '')}).\n"
+                    f"- Formula Hook: {hook}\n"
+                    f"{PROMPT_RULES_CLEAN}\n"
+                    f"Baris 1 WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 emoji penahan jempol dalam 1-3 detik. Maksimal 300 karakter tanpa tanda kutip."
                 )
                 main_txt = call_gemini(prompt)
                 closing = random.choice(CLOSING_NARRATIVES)
@@ -422,13 +473,11 @@ def run_worker():
         if name and uid and token:
             accounts_map[name] = {"user_id": uid, "access_token": token}
 
-    # 1. GENERATE OTOMATIS: Buat draf harian jika hari ini masih kosong
     try:
         auto_generate_today_drafts_if_needed(sh, accounts_map)
     except Exception as e:
         print(f"[AUTO-GEN ERROR] Terjadi kendala saat generate otomatis: {e}")
 
-    # 2. EKSEKUSI POSTING: Terbitkan postingan yang sudah tiba jamnya
     data_ws = sh.worksheet("data")
     rows = data_ws.get_all_values()
     if len(rows) <= 1:
