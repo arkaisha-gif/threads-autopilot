@@ -36,72 +36,31 @@ SPREADSHEET_ID = get_secret("SPREADSHEET_ID", "12HI63liR64ugPz8IHQHy2gAhOOzSDMt0
 GCP_CREDS_BASE64 = get_secret("GCP_CREDS_BASE64")
 AI_API_KEY = get_secret("AI_API_KEY")
 
-TOPIC_PILLARS = {
-    "DEBAT_SEPELE": [
-        "perdebatan kebiasaan sepele sehari-hari yang bikin orang terbagi jadi dua kubu sengit",
-        "etika makan atau nongkrong yang sering bikin salah paham tapi jarang dibahas terbuka",
-        "kebiasaan chatting yang diam-diam bikin jengkel (misal: kirim voice note 5 menit atau cuma 'P')"
-    ],
-    "SOSIAL_DEWASA": [
-        "realita pertemanan di usia 25 tahun ke atas dan susahnya mencocokkan jadwal nongkrong",
-        "momen ketika energi sosial (social battery) habis total dan pengen langsung pulang",
-        "seni menetapkan batasan ke orang lain (subtle cut-off) tanpa merasa bersalah"
-    ],
-    "DUNIA_KERJA": [
-        "situasi rapat kantor berjam-jam yang sebenernya bisa selesai dalam satu baris email",
-        "perasaan serba salah waktu libur/cuti tapi notifikasi grup kantor masih muncul",
-        "dilema perfeksionis vs yang penting tugas kelar tepat waktu biar cepat pulang"
-    ],
-    "RUMAH_KOST": [
-        "masalah sepele di rumah atau kamar kost yang sering diabaikan padahal bikin emosi tiap hari",
-        "perjuangan menjaga kerapian meja kerja atau kamar saat lagi sibuk-sibuknya",
-        "barang printilan rumah tangga yang baru disadari faedahnya setelah dicoba sendiri"
-    ],
-    "JALANAN_KOMUTER": [
-        "drama transportasi umum, antrean KRL/MRT, atau macetnya jalanan kota",
-        "tipe orang menyebalkan yang sering ditemui di tempat umum atau transportasi massal"
-    ],
-    "NOSTALGIA_POPKULTUR": [
-        "kebiasaan anak zaman rental PS dulu yang sekarang udah gak relevan lagi buat anak sekarang",
-        "perbedaan cara kita menikmati waktu luang zaman sekolah vs pas udah kerja"
-    ]
-}
-
-PROMPT_RULES_CLEAN = """
-DILARANG KERAS (BLACKLIST TOPIK & KATA):
-1. JANGAN PERNAH bahas: gaji, tanggal tua, bokek, reksadana, tabungan, investasi finansial, bayar kos, biaya hidup, atau hitung-hitungan uang.
-2. JANGAN PERNAH pakai format tanya-jawab brosur iklan (Contoh terlarang: 'Pusing dengan X? Y solusinya!', 'Lagi butuh X?').
-3. DILARANG pakai kata klise sales: 'solusinya', 'cukup dengan...', 'dijamin', 'hadir untuk Anda', 'yuk buruan'.
-
-PANDUAN STRUKTUR & GAYA HOOK 1-3 DETIK:
-- Baris pertama WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 EMOJI relevan yang berfungsi sebagai rem jempol (stop scrolling) penonton.
-- Baris berikutnya gunakan sudut pandang orang pertama ('aku', 'suami', 'mertua', 'roommate', 'jujur baru sadar').
-- Tulis mengalir, curhat nyata, ada emosi/gregetan, celetukan santai khas obrolan linimasa Threads Indonesia.
-- Dilarang pakai hashtag (#), dilarang pakai tanda kutip dua.
-"""
-
-VIRAL_HOOK_PATTERNS = [
-    "Trigger Drama Relasi (Pasangan/Mertua): Awali baris pertama dengan dialog/reaksi pasangan atau mertua huruf kapital (misal: 'SUAMI: KAMU KALAU NYUCI KOK RIBET BANGET? 😭😂').",
-    "Trigger Nyaris Malu (Social Anxiety): Awali baris pertama dengan momen horor/panik di tempat umum huruf kapital (misal: 'HAMPIR MALU DI RUANG MEETING KANTOR GARA-GARA BASKET 😭💀').",
-    "Trigger Otoritas/Orang Dalam: Awali baris pertama dengan ucapan terima kasih huruf kapital ke dokter/ahli yang kasih bocoran (misal: 'MAKASIH MBAK DOKTER YANG UDAH KASI TAU INI 😭🙏').",
-    "Trigger Kaum Mager/Satset: Awali baris pertama dengan pengakuan malas huruf kapital tapi nemu jalan pintas (misal: 'SEBAGAI ORANG YANG PALING MALES NYIKAT KAMAR MANDI... 🤣').",
-    "Trigger Satisfying/Sensorik: Awali baris pertama dengan kepuasan visual/suara huruf kapital (misal: 'THERAPY TERBAIK MINGGU INI: LIAT AIR RENDAMAN JADI BUTEK COKLAT 🤤😭').",
-    "Trigger Parno/Micro-Anxiety: Awali baris pertama dengan rasa cemas/jijik huruf kapital (misal: 'PARNO TIAP LIAT KECOA MUNCUL DARI BAWAH KITCHEN SET 😭').",
-    "Trigger Terlambat Sadar (Umur): Awali baris pertama dengan keheranan kenapa baru tahu barang ini sekarang (misal: 'UMUR 27 TAHUN BARU SADAR BENDA KECIL INI NYELAMATIN PUNGGUNG 😭').",
-    "Trigger Skeptis Berujung Tobat: Awali baris pertama dengan mengira awalnya cuma gimik iklan huruf kapital (misal: 'KIRAIN CUMA GIMIK IKLAN LEBAY, TERNYATA EMANG SESAKTI ITU 😭')."
+# Vibe dinamis khas kultur Threads Indonesia
+THREADS_VIBES = [
+    "Capek mental / Realistis: gaya orang lelah yang males ribet, praktis, to the point.",
+    "Self-deprecating humor: ngetawain kebiasaan diri sendiri yang dulu repot dan konyol.",
+    "Santai ala Close Friends: bahasa tongkrongan santai, celetukan natural, gak ada kesan jualan.",
+    "Aesthetic & mindful: fokus ke ketenangan pikiran, kenyamanan ruang, atau kepuasan visual.",
+    "Review jujur tanpa filter: lugas, apa adanya, langsung sebut kenapa barang ini ngebantu hidup.",
+    "Hot take / observasi santai: mempertanyakan kenapa orang masih ribet pakai cara lama."
 ]
 
-CLOSING_NARRATIVES = [
-    "Btw banyak yang nanya di DM, ini link toko resmi tempat aku beli ya mumpung masih promo:",
-    "Biar gak salah beli atau dapet yang zonk, aku taro link official store-nya di sini ya:",
-    "Yang mau samaan atau sekadar cek review pembeli lainnya, langsung kepoin di sini:",
-    "Spill link belinya di sini ya guys, kemarin pas aku cek lagi ada diskon lumayan:",
-    "Daripada ribet nyari tokonya satu-satu, langsung meluncur ke toko resminya di sini:",
-    "Kalo mau checkout mending sekarang sebelum kehabisan stok, link belinya di sini:",
-    "Kemarin dapet harga flash sale di toko ini dan pengirimannya cepet, linknya:",
-    "Biar dapet garansi resmi dan barang original, belinya lewat link ini ya:",
-    "Buat yang minta spill racunnya, ini link toko terpercaya yang sering aku pake:",
-    "Yang mau CO taro keranjang dulu aja, mumpung vouchernya masih aktif di sini:"
+VIRAL_OBSERVATIONS = [
+    "Observasi fenomena absurd atau kebiasaan sepele orang Indonesia sehari-hari.",
+    "Dilema umur 20-an ke atas: pertemanan menipis, energi sosial nol, atau culture shock kerja.",
+    "Debat sepele tapi bikin dua kubu warganet ribut santai di kolom komentar.",
+    "Shower thoughts tengah malam atau kebiasaan aneh yang ternyata dialami banyak orang.",
+    "Opini santai tentang hal yang sering diromantisasi padahal aslinya melelahkan."
+]
+
+REPLY_STARTERS = [
+    "Link tokonya gua taro sini ya biar gampang:",
+    "Beli di official store resminya di sini mumpung diskon:",
+    "Buat yang butuh juga, linknya di sini ya:",
+    "Spill tokonya di sini guys:",
+    "Link belinya yang ori ada di sini ya:",
+    "Yang mau samaan langsung cek di sini:"
 ]
 
 def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
@@ -115,8 +74,17 @@ def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
 def call_gemini(prompt: str) -> str:
     key = str(AI_API_KEY).strip().replace("'", "").replace('"', "") if AI_API_KEY else ""
     if not key:
-        print("[GEMINI ERROR] AI_API_KEY kosong atau belum terbaca dari Secrets/Environment!")
-        return "Rekomendasi barang praktis yang ngebantu banget aktivitas harian."
+        print("[GEMINI ERROR] AI_API_KEY kosong!")
+        return "Salah satu barang yang lumayan ngebantu rutinitas harian."
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.95,
+            "topP": 0.95,
+            "topK": 40
+        }
+    }
 
     available_pairs = []
     for ver in ["v1", "v1beta"]:
@@ -143,7 +111,7 @@ def call_gemini(prompt: str) -> str:
     for ver, m_name in available_pairs:
         url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
         try:
-            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30).json()
+            res = requests.post(url, json=payload, timeout=30).json()
             if "candidates" in res and res["candidates"]:
                 text_out = res["candidates"][0]["content"]["parts"][0]["text"].strip()
                 if text_out:
@@ -162,7 +130,7 @@ def call_gemini(prompt: str) -> str:
     for ver, m_name in fallback_models:
         url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
         try:
-            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30).json()
+            res = requests.post(url, json=payload, timeout=30).json()
             if "candidates" in res and res["candidates"]:
                 text_out = res["candidates"][0]["content"]["parts"][0]["text"].strip()
                 if text_out:
@@ -170,8 +138,7 @@ def call_gemini(prompt: str) -> str:
         except Exception:
             pass
 
-    print("[GEMINI FAILED] Seluruh percobaan model gagal. Menggunakan fallback.")
-    return "Rekomendasi barang praktis yang ngebantu banget aktivitas harian."
+    return "Salah satu barang yang lumayan ngebantu rutinitas harian."
 
 def generate_slots(total_count, start_time_str="08:15", end_time_str="21:30"):
     if total_count <= 0:
@@ -248,7 +215,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     if has_today_posts:
         return
 
-    print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] 📅 Belum ada draf untuk hari ini ({today_str}). Menjalankan Auto-Generate...")
+    print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] 📅 Menyiapkan konten organik Threads untuk ({today_str})...")
 
     cfg_ws = sh.worksheet("Config")
     cfg_rows = cfg_ws.get_all_values()
@@ -260,7 +227,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         start_date = datetime.strptime(start_str.split()[0], "%Y-%m-%d").date()
         end_date = datetime.strptime(end_str.split()[0], "%Y-%m-%d").date()
         if not (start_date <= now_dt.date() <= end_date):
-            print(f"[AUTO-GEN] Tanggal hari ini di luar rentang jadwal aktif ({start_date} s/d {end_date}). Lewati.")
+            print(f"[AUTO-GEN] Hari ini di luar rentang aktif ({start_date} s/d {end_date}). Lewati.")
             return
     except Exception as e:
         print(f"[AUTO-GEN WARN] Gagal cek rentang tanggal: {e}")
@@ -297,13 +264,18 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 
         v_i, t_i = 0, 0
         for slot_time, p_type in zip(slots, types_list):
+            vibe = random.choice(THREADS_VIBES)
+
             if p_type == "viral":
-                cat = random.choice(list(TOPIC_PILLARS.keys()))
-                sub_top = random.choice(TOPIC_PILLARS[cat])
+                topik = random.choice(VIRAL_OBSERVATIONS)
                 prompt_v = (
-                    f"Tulis 1 postingan Threads bahasa Indonesia tentang: '{sub_top}'.\n"
-                    f"{PROMPT_RULES_CLEAN}\n"
-                    f"Maksimal 220 karakter tanpa tanda kutip."
+                    f"Kamu adalah user Threads Indonesia yang witty, cerdas, dan aktif.\n"
+                    f"Tulis 1 postingan Threads yang memicu orang berkomentar atau repost tentang topik ini: '{topik}'.\n"
+                    f"Vibe: {vibe}.\n\n"
+                    f"Pedoman penting:\n"
+                    f"- Jangan gunakan formula template kaku. Tulis mengalir santai.\n"
+                    f"- Boleh santai, huruf kecil, atau punchline di awal yang relevan.\n"
+                    f"- Maksimal 220 karakter. Langsung tulis isi postingannya tanpa tanda petik."
                 )
                 p_text = call_gemini(prompt_v)
                 new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(p_text), "", "", "", "PENDING", "", "", "", ""])
@@ -311,16 +283,20 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
             elif p_type == "video":
                 p_cur = sampled_video[v_i] if v_i < len(sampled_video) else random.choice(ready_prods)
                 v_i += 1
-                hook = random.choice(VIRAL_HOOK_PATTERNS)
                 prompt = (
-                    f"Tulis 1 postingan Threads bahasa Indonesia penahan jempol (stop scrolling) penonton video untuk produk: '{p_cur['product_name']}' "
-                    f"(Keunggulan: {p_cur.get('highlight', '')}).\n"
-                    f"- Formula Hook: {hook}\n"
-                    f"{PROMPT_RULES_CLEAN}\n"
-                    f"Baris 1 WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 emoji penahan jempol dalam 1-3 detik. Maksimal 300 karakter tanpa tanda kutip."
+                    f"Kamu adalah pengguna Threads Indonesia yang aktif dan autentik.\n"
+                    f"Tulis 1 postingan Threads pengantar video untuk produk ini:\n"
+                    f"- Nama Produk: {p_cur['product_name']}\n"
+                    f"- Keunggulan/Konteks: {p_cur.get('highlight', '')}\n"
+                    f"- Vibe konten: {vibe}\n\n"
+                    f"Aturan penting:\n"
+                    f"1. BUKAN BAHASA IKLAN/SALES. Tulis seperti orang beneran yang curhat, review spontan, atau share hal praktis di linimasa.\n"
+                    f"2. Jangan gunakan template 'MAKASIH DOKTER' atau 'MERTUA'. Gunakan kreativitas alami.\n"
+                    f"3. Jangan taruh link di postingan utama ini.\n"
+                    f"4. Maksimal 300 karakter. Langsung tulis isi postingan tanpa tanda kutip."
                 )
                 main_txt = call_gemini(prompt)
-                closing = random.choice(CLOSING_NARRATIVES)
+                closing = random.choice(REPLY_STARTERS)
                 aff_reply = f"{closing}\n{p_cur['affiliate_link']}"
                 media_formatted = prepare_media_for_post(str(p_cur.get("media_url", "")).strip(), duplicate_single_video=True)
                 new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(main_txt), media_formatted, sanitize_threads_text(aff_reply), p_cur['affiliate_link'], "PENDING", "", "", "", ""])
@@ -328,23 +304,27 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
             else:
                 p_cur = sampled_text[t_i] if t_i < len(sampled_text) else random.choice(ready_prods)
                 t_i += 1
-                hook = random.choice(VIRAL_HOOK_PATTERNS)
                 prompt = (
-                    f"Tulis 1 postingan Threads bahasa Indonesia rekomendasi produk: '{p_cur['product_name']}' "
-                    f"(Keunggulan: {p_cur.get('highlight', '')}).\n"
-                    f"- Formula Hook: {hook}\n"
-                    f"{PROMPT_RULES_CLEAN}\n"
-                    f"Baris 1 WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 emoji penahan jempol dalam 1-3 detik. Maksimal 300 karakter tanpa tanda kutip."
+                    f"Kamu adalah pengguna Threads Indonesia yang aktif dan santai.\n"
+                    f"Tulis 1 postingan Threads teks tanpa gambar tentang produk/solusi praktis ini:\n"
+                    f"- Produk: {p_cur['product_name']}\n"
+                    f"- Keunggulan: {p_cur.get('highlight', '')}\n"
+                    f"- Vibe: {vibe}\n\n"
+                    f"Aturan penting:\n"
+                    f"1. BUKAN BAHASA BROSUR IKLAN. Tulis seperti tweet/Threads organik dari pengalaman pribadi atau observasi sehari-hari.\n"
+                    f"2. Gaya santai, mengalir, variatif, dan hindari kata klise sales.\n"
+                    f"3. Jangan taruh link di postingan utama.\n"
+                    f"4. Maksimal 300 karakter. Langsung tulis postingan tanpa tanda kutip."
                 )
                 main_txt = call_gemini(prompt)
-                closing = random.choice(CLOSING_NARRATIVES)
+                closing = random.choice(REPLY_STARTERS)
                 aff_reply = f"{closing}\n{p_cur['affiliate_link']}"
                 new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(main_txt), "", sanitize_threads_text(aff_reply), p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
     for row_item in new_rows:
         data_ws.append_row(row_item)
 
-    print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] ✅ Berhasil membuat {len(new_rows)} draf otomatis untuk hari ini!")
+    print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] ✅ Berhasil membuat {len(new_rows)} postingan organik Threads untuk hari ini!")
 
 def wait_for_container(container_id: str, access_token: str, max_wait: int = 150) -> bool:
     url = f"https://graph.threads.net/v1.0/{container_id}?fields=status,error_message&access_token={access_token}"
