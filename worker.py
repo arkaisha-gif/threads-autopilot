@@ -140,7 +140,7 @@ def call_gemini(prompt: str) -> str:
 
     return "Salah satu barang yang lumayan ngebantu rutinitas harian."
 
-def generate_slots(total_count, start_time_str="08:15", end_time_str="21:30"):
+def generate_slots(total_count, start_time_str="04:15", end_time_str="23:30"):
     if total_count <= 0:
         return []
     if total_count == 1:
