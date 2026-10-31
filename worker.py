@@ -53,13 +53,11 @@ VIRAL_OBSERVATIONS = [
     "Opini santai tentang hal yang sering diromantisasi padahal aslinya melelahkan."
 ]
 
-REPLY_STARTERS = [
-    "Link tokonya gua taro sini ya biar gampang:",
-    "Beli di official store resminya di sini mumpung diskon:",
-    "Buat yang butuh juga, linknya di sini ya:",
-    "Spill tokonya di sini guys:",
-    "Link belinya yang ori ada di sini ya:",
-    "Yang mau samaan langsung cek di sini:"
+FALLBACK_CTA_STARTERS = [
+    "Awas ketipu tiruan yang bahannya abal-abal, toko resminya yang beneran ori di sini ya:",
+    "Harganya beneran gak masuk akal murahnya, mending amankan di lapak aslinya di sini:",
+    "Biar gak capek nyari manual ketumpuk seller lain, link official store-nya di sini ya:",
+    "Buat yang butuh juga daripada nahan repot, ambil di toko resminya di sini:"
 ]
 
 def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
@@ -187,3 +185,156 @@ def get_sheets_client():
     elif os.path.exists(raw_creds):
         with open(raw_creds, "r", encoding="utf-8") as f:
             info = json.load(f)
+    else:
+        decoded = base64.b64decode(raw_creds).decode("utf-8")
+        info = json.loads(decoded)
+
+    creds = Credentials.from_service_account_info(
+        info,
+        scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    )
+    return gspread.authorize(creds)
+
+# ==========================================
+# 📊 MODUL ANALITIK & AI SELF-LEARNING
+# ==========================================
+
+def update_threads_insights(sh, accounts_map):
+    """Menarik metrik views, likes, replies, reposts dari Meta API untuk postingan aktif."""
+    data_ws = sh.worksheet("data")
+    rows = data_ws.get_all_values()
+    if len(rows) <= 1:
+        return
+
+    now_dt = datetime.now(TZ)
+    updated_count = 0
+
+    print(f"[{now_dt.strftime('%H:%M:%S')}] 🔍 Memeriksa postingan aktif untuk pembaruan metrik...")
+
+    for idx, r in enumerate(rows[1:], start=2):
+        while len(r) < 17:
+            r.append("")
+
+        post_date = r[0].strip()
+        post_time = r[1].strip()
+        target_acc = r[2].strip()
+        status = r[7].strip().upper()
+
+        if status != "POSTED":
+            continue
+
+        raw_candidates = [r[8].strip(), r[9].strip()]
+        main_id = ""
+        detected_acc = target_acc
+
+        for cand in raw_candidates:
+            if not cand:
+                continue
+            if ":" in cand:
+                parts = cand.split(":", 1)
+                detected_acc = parts[0].strip()
+                cand = parts[1].strip()
+
+            m_id = re.search(r'\b\d{15,20}\b', cand)
+            if m_id:
+                main_id = m_id.group(0)
+                break
+
+        if not main_id:
+            continue
+
+        try:
+            m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", post_date)
+            t_m = re.match(r"^(\d{1,2}):(\d{1,2})$", post_time)
+            if m and t_m:
+                p_dt = TZ.localize(datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(t_m.group(1)), int(t_m.group(2))))
+                post_age_hours = (now_dt - p_dt).total_seconds() / 3600.0
+                if post_age_hours < 0.25 or post_age_hours > (14 * 24):
+                    continue
+        except Exception:
+            pass
+
+        acc_info = accounts_map.get(detected_acc)
+        if not acc_info and target_acc != "ALL":
+            acc_info = accounts_map.get(target_acc)
+        if not acc_info and accounts_map:
+            acc_info = list(accounts_map.values())[0]
+
+        if not acc_info:
+            continue
+
+        tok = acc_info["access_token"]
+        ins_url = f"https://graph.threads.net/v1.0/{main_id}/insights?metric=views,likes,replies,reposts&access_token={tok}"
+
+        try:
+            res = requests.get(ins_url, timeout=15).json()
+            if "data" in res:
+                metrics_data = {item["name"]: item["values"][0]["value"] for item in res["data"] if "values" in item and item["values"]}
+                v = metrics_data.get("views", 0)
+                l = metrics_data.get("likes", 0)
+                rep = metrics_data.get("replies", 0)
+                repst = metrics_data.get("reposts", 0)
+
+                update_values = [[v, l, rep, repst, now_dt.strftime("%Y-%m-%d %H:%M:%S")]]
+                try:
+                    data_ws.update(range_name=f"M{idx}:Q{idx}", values=update_values)
+                except TypeError:
+                    data_ws.update(f"M{idx}:Q{idx}", update_values)
+
+                updated_count += 1
+                time.sleep(1)
+            elif "error" in res:
+                err_msg = res["error"].get("message", "")
+                print(f"[INSIGHTS WARN] Meta menolak post {main_id}: {err_msg}")
+        except Exception as ex:
+            print(f"[INSIGHTS WARN] Gagal menarik metrik post {main_id}: {ex}")
+
+    if updated_count > 0:
+        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] 📈 Berhasil memperbarui metrik untuk {updated_count} postingan!")
+
+def extract_self_learning_patterns(rows):
+    """Menganalisa winning copies, winning products, dan jam tayang terbaik."""
+    if len(rows) <= 1:
+        return {"winning_copies": [], "winning_products": {}, "top_hour_slots": []}
+
+    posted_rows = []
+    for r in rows[1:]:
+        if len(r) >= 13 and r[7].strip().upper() == "POSTED":
+            try:
+                views_cnt = int(r[12].strip()) if r[12].strip().isdigit() else 0
+                likes_cnt = int(r[13].strip()) if len(r) > 13 and r[13].strip().isdigit() else 0
+                posted_rows.append({
+                    "date": r[0].strip(),
+                    "time": r[1].strip(),
+                    "acc": r[2].strip(),
+                    "text": r[3].strip(),
+                    "aff_link": r[6].strip(),
+                    "views": views_cnt,
+                    "likes": likes_cnt
+                })
+            except Exception:
+                pass
+
+    if not posted_rows:
+        return {"winning_copies": [], "winning_products": {}, "top_hour_slots": []}
+
+    sorted_by_views = sorted(posted_rows, key=lambda x: x["views"], reverse=True)
+    top_copies = [x["text"] for x in sorted_by_views[:3] if x["views"] > 0]
+
+    product_views = {}
+    for x in posted_rows:
+        link = x["aff_link"]
+        if link:
+            product_views[link] = product_views.get(link, 0) + x["views"]
+
+    hour_views = {}
+    hour_counts = {}
+    for x in posted_rows:
+        try:
+            h = int(x["time"].split(":")[0])
+            hour_views[h] = hour_views.get(h, 0) + x["views"]
+            hour_counts[h] = hour_counts.get(h, 0) + 1
+        except Exception:
+            pass
+
+    top_hours = []
