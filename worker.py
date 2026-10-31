@@ -36,7 +36,6 @@ SPREADSHEET_ID = get_secret("SPREADSHEET_ID", "12HI63liR64ugPz8IHQHy2gAhOOzSDMt0
 GCP_CREDS_BASE64 = get_secret("GCP_CREDS_BASE64")
 AI_API_KEY = get_secret("AI_API_KEY")
 
-# Vibe dinamis khas kultur Threads Indonesia
 THREADS_VIBES = [
     "Capek mental / Realistis: gaya orang lelah yang males ribet, praktis, to the point.",
     "Self-deprecating humor: ngetawain kebiasaan diri sendiri yang dulu repot dan konyol.",
@@ -140,7 +139,7 @@ def call_gemini(prompt: str) -> str:
 
     return "Salah satu barang yang lumayan ngebantu rutinitas harian."
 
-def generate_slots(total_count, start_time_str="04:15", end_time_str="23:30"):
+def generate_slots(total_count, start_time_str="04:30", end_time_str="23:30"):
     if total_count <= 0:
         return []
     if total_count == 1:
@@ -198,6 +197,149 @@ def get_sheets_client():
     )
     return gspread.authorize(creds)
 
+# ==========================================
+# 📊 MODUL ANALITIK & AI SELF-LEARNING
+# ==========================================
+
+def update_threads_insights(sh, accounts_map):
+    """Menarik metrik views, likes, replies, reposts dari Meta API untuk postingan yang berumur >= 12 jam."""
+    data_ws = sh.worksheet("data")
+    rows = data_ws.get_all_values()
+    if len(rows) <= 1:
+        return
+
+    now_dt = datetime.now(TZ)
+    updated_count = 0
+
+    print(f"[{now_dt.strftime('%H:%M:%S')}] 🔍 Memeriksa postingan aktif untuk pembaruan metrik...")
+
+    for idx, r in enumerate(rows[1:], start=2):
+        while len(r) < 17:
+            r.append("")
+
+        post_date = r[0].strip()
+        post_time = r[1].strip()
+        target_acc = r[2].strip()
+        status = r[7].strip().upper()
+        main_id = r[8].strip()
+        last_metric_update = r[16].strip()
+
+        if status != "POSTED" or not main_id or not main_id.isdigit():
+            continue
+
+        try:
+            m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", post_date)
+            t_m = re.match(r"^(\d{1,2}):(\d{1,2})$", post_time)
+            if not m or not t_m:
+                continue
+            p_dt = TZ.localize(datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(t_m.group(1)), int(t_m.group(2))))
+        except Exception:
+            continue
+
+        post_age_hours = (now_dt - p_dt).total_seconds() / 3600.0
+
+        # Tarik metrik hanya untuk postingan usia antara 8 jam s/d 7 hari, dan belum dicek dalam 12 jam terakhir
+        if post_age_hours < 8 or post_age_hours > (7 * 24):
+            continue
+
+        if last_metric_update:
+            try:
+                last_dt = TZ.localize(datetime.strptime(last_metric_update, "%Y-%m-%d %H:%M:%S"))
+                if (now_dt - last_dt).total_seconds() / 3600.0 < 12:
+                    continue
+            except Exception:
+                pass
+
+        acc_info = accounts_map.get(target_acc)
+        if not acc_info:
+            continue
+
+        tok = acc_info["access_token"]
+        ins_url = f"https://graph.threads.net/v1.0/{main_id}/insights?metric=views,likes,replies,reposts&access_token={tok}"
+
+        try:
+            res = requests.get(ins_url, timeout=15).json()
+            if "data" in res:
+                metrics_data = {item["name"]: item["values"][0]["value"] for item in res["data"] if "values" in item and item["values"]}
+                v = metrics_data.get("views", 0)
+                l = metrics_data.get("likes", 0)
+                rep = metrics_data.get("replies", 0)
+                repst = metrics_data.get("reposts", 0)
+
+                data_ws.update_cell(idx, 13, v)
+                data_ws.update_cell(idx, 14, l)
+                data_ws.update_cell(idx, 15, rep)
+                data_ws.update_cell(idx, 16, repst)
+                data_ws.update_cell(idx, 17, now_dt.strftime("%Y-%m-%d %H:%M:%S"))
+
+                updated_count += 1
+                time.sleep(1)  # Hindari rate limit Meta
+        except Exception as ex:
+            print(f"[INSIGHTS WARN] Gagal menarik metrik post {main_id}: {ex}")
+
+    if updated_count > 0:
+        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] 📈 Berhasil memperbarui metrik untuk {updated_count} postingan!")
+
+def extract_self_learning_patterns(rows):
+    """Menganalisa winning copies, winning products, dan jam tayang terbaik dari baris data."""
+    if len(rows) <= 1:
+        return {"winning_copies": [], "winning_products": {}, "top_hour_slots": []}
+
+    posted_rows = []
+    for r in rows[1:]:
+        if len(r) >= 13 and r[7].strip().upper() == "POSTED":
+            try:
+                views_cnt = int(r[12].strip()) if r[12].strip().isdigit() else 0
+                likes_cnt = int(r[13].strip()) if len(r) > 13 and r[13].strip().isdigit() else 0
+                posted_rows.append({
+                    "date": r[0].strip(),
+                    "time": r[1].strip(),
+                    "acc": r[2].strip(),
+                    "text": r[3].strip(),
+                    "aff_link": r[6].strip(),
+                    "views": views_cnt,
+                    "likes": likes_cnt
+                })
+            except Exception:
+                pass
+
+    if not posted_rows:
+        return {"winning_copies": [], "winning_products": {}, "top_hour_slots": []}
+
+    # 1. Winning Copies: Ambil 3 postingan dengan views tertinggi
+    sorted_by_views = sorted(posted_rows, key=lambda x: x["views"], reverse=True)
+    top_copies = [x["text"] for x in sorted_by_views[:3] if x["views"] > 0]
+
+    # 2. Winning Products: Akumulasi total views per link affiliate
+    product_views = {}
+    for x in posted_rows:
+        link = x["aff_link"]
+        if link:
+            product_views[link] = product_views.get(link, 0) + x["views"]
+
+    # 3. Best Performing Hours: Cari jam-jam dengan rata-rata impresi tertinggi
+    hour_views = {}
+    hour_counts = {}
+    for x in posted_rows:
+        try:
+            h = int(x["time"].split(":")[0])
+            hour_views[h] = hour_views.get(h, 0) + x["views"]
+            hour_counts[h] = hour_counts.get(h, 0) + 1
+        except Exception:
+            pass
+
+    top_hours = []
+    if hour_counts:
+        avg_hour = {h: hour_views[h] / hour_counts[h] for h in hour_views if hour_counts[h] > 0}
+        sorted_hours = sorted(avg_hour.items(), key=lambda item: item[1], reverse=True)
+        top_hours = [item[0] for item in sorted_hours if item[1] > 0]
+
+    return {
+        "winning_copies": top_copies,
+        "winning_products": product_views,
+        "top_hour_slots": top_hours
+    }
+
 def auto_generate_today_drafts_if_needed(sh, accounts_map):
     now_dt = datetime.now(TZ)
     today_str = now_dt.strftime("%Y-%m-%d")
@@ -215,7 +357,13 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     if has_today_posts:
         return
 
-    print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] 📅 Menyiapkan konten organik Threads untuk ({today_str})...")
+    print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] 📅 Menyiapkan konten draf cerdas (AI Self-Learning) untuk ({today_str})...")
+
+    # Ekstrak pola winning dari data historis
+    learnings = extract_self_learning_patterns(existing_rows)
+    winning_copies = learnings["winning_copies"]
+    winning_products_map = learnings["winning_products"]
+    top_hours = learnings["top_hour_slots"]
 
     cfg_ws = sh.worksheet("Config")
     cfg_rows = cfg_ws.get_all_values()
@@ -250,50 +398,82 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         print("[AUTO-GEN] Tidak ada produk berstatus READY di tab Products.")
         return
 
-    prods_with_media = [p for p in ready_prods if str(p.get("media_url", "")).strip()]
-    prods_text_only = [p for p in ready_prods if not str(p.get("media_url", "")).strip()] or ready_prods
-
     total_plan = daily_viral + daily_text + daily_video
-    slots = generate_slots(total_plan)
+    slots = generate_slots(total_plan, start_time_str="04:30", end_time_str="23:30")
     types_list = arrange_post_types_3way(daily_viral, daily_text, daily_video)
+
+    # Susun referensi winning copy untuk prompt Gemini jika sudah tersedia data historis
+    winning_context_prompt = ""
+    if winning_copies:
+        formatted_examples = "\n---\n".join(winning_copies)
+        winning_context_prompt = (
+            f"\n\n[CONTOH POSTINGAN TERBUKTI PALING BANYAK DISUKAI & DIRESPON DI AKUN INI]:\n"
+            f"{formatted_examples}\n"
+            f"Instruksi Khusus AI: Pelajari ritme tulisan, sudut pandang, dan cara penyampaian di atas. "
+            f"Gunakan energi, vibe, dan struktur serupa untuk produk di bawah ini tanpa menjiplak teksnya secara kata per kata!"
+        )
 
     new_rows = []
     for acc_name in target_accounts:
-        sampled_video = random.sample(prods_with_media, min(daily_video, len(prods_with_media))) if (daily_video > 0 and prods_with_media) else []
-        sampled_text = random.sample(prods_text_only, min(daily_text, len(prods_text_only))) if (daily_text > 0 and prods_text_only) else []
+        acc_info = accounts_map.get(acc_name, {})
+        acc_category = acc_info.get("category", "").strip().lower()
 
-        v_i, t_i = 0, 0
+        # Filter produk berdasarkan niche akun
+        if acc_category:
+            matched_prods = [p for p in ready_prods if str(p.get("category", "")).strip().lower() == acc_category]
+            active_prods = matched_prods if matched_prods else ready_prods
+        else:
+            active_prods = ready_prods
+
+        # PEMILIHAN WINNING PRODUCT: Beri bobot probabilitas lebih tinggi pada produk yang punya views tinggi
+        def pick_weighted_product(prod_list):
+            if not prod_list:
+                return random.choice(ready_prods)
+            weights = []
+            for p in prod_list:
+                link = p.get("affiliate_link", "")
+                vw = winning_products_map.get(link, 0)
+                weights.append(1.0 + (vw / 200.0))  # Bobot dasar 1.0, meningkat seiring tingginya views
+            return random.choices(prod_list, weights=weights, k=1)[0]
+
+        prods_with_media = [p for p in active_prods if str(p.get("media_url", "")).strip()]
+        prods_text_only = [p for p in active_prods if not str(p.get("media_url", "")).strip()] or active_prods
+
         for slot_time, p_type in zip(slots, types_list):
             vibe = random.choice(THREADS_VIBES)
+
+            # Optimasi Jam Tayang: Jika slot ini masuk jam tayang terbukti ramai, prioritaskan format Video
+            try:
+                curr_hour = int(slot_time.split(":")[0])
+                if top_hours and curr_hour in top_hours[:3] and prods_with_media:
+                    p_type = "video"
+            except Exception:
+                pass
 
             if p_type == "viral":
                 topik = random.choice(VIRAL_OBSERVATIONS)
                 prompt_v = (
                     f"Kamu adalah user Threads Indonesia yang witty, cerdas, dan aktif.\n"
                     f"Tulis 1 postingan Threads yang memicu orang berkomentar atau repost tentang topik ini: '{topik}'.\n"
-                    f"Vibe: {vibe}.\n\n"
-                    f"Pedoman penting:\n"
-                    f"- Jangan gunakan formula template kaku. Tulis mengalir santai.\n"
-                    f"- Boleh santai, huruf kecil, atau punchline di awal yang relevan.\n"
-                    f"- Maksimal 220 karakter. Langsung tulis isi postingannya tanpa tanda petik."
+                    f"Vibe: {vibe}.\n{winning_context_prompt}\n\n"
+                    f"Pedoman: Santai, huruf kecil atau punchline di awal, maksimal 220 karakter tanpa tanda kutip."
                 )
                 p_text = call_gemini(prompt_v)
                 new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(p_text), "", "", "", "PENDING", "", "", "", ""])
 
             elif p_type == "video":
-                p_cur = sampled_video[v_i] if v_i < len(sampled_video) else random.choice(ready_prods)
-                v_i += 1
+                p_cur = pick_weighted_product(prods_with_media) if prods_with_media else pick_weighted_product(active_prods)
                 prompt = (
                     f"Kamu adalah pengguna Threads Indonesia yang aktif dan autentik.\n"
                     f"Tulis 1 postingan Threads pengantar video untuk produk ini:\n"
                     f"- Nama Produk: {p_cur['product_name']}\n"
                     f"- Keunggulan/Konteks: {p_cur.get('highlight', '')}\n"
-                    f"- Vibe konten: {vibe}\n\n"
+                    f"- Vibe konten: {vibe}\n{winning_context_prompt}\n\n"
                     f"Aturan penting:\n"
-                    f"1. BUKAN BAHASA IKLAN/SALES. Tulis seperti orang beneran yang curhat, review spontan, atau share hal praktis di linimasa.\n"
-                    f"2. Jangan gunakan template 'MAKASIH DOKTER' atau 'MERTUA'. Gunakan kreativitas alami.\n"
+                    f"1. BUKAN BAHASA SALES/IKLAN. Tulis seperti curhat nyata, review spontan, atau kebiasaan sehari-hari.\n"
+                    f"2. Jangan gunakan template kaku ('MERTUA:', 'MAKASIH DOKTER'). Tulis mengalir alami.\n"
                     f"3. Jangan taruh link di postingan utama ini.\n"
-                    f"4. Maksimal 300 karakter. Langsung tulis isi postingan tanpa tanda kutip."
+                    f"4. Maksimal 300 karakter tanpa tanda kutip."
                 )
                 main_txt = call_gemini(prompt)
                 closing = random.choice(REPLY_STARTERS)
@@ -302,19 +482,18 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                 new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(main_txt), media_formatted, sanitize_threads_text(aff_reply), p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
             else:
-                p_cur = sampled_text[t_i] if t_i < len(sampled_text) else random.choice(ready_prods)
-                t_i += 1
+                p_cur = pick_weighted_product(prods_text_only)
                 prompt = (
                     f"Kamu adalah pengguna Threads Indonesia yang aktif dan santai.\n"
                     f"Tulis 1 postingan Threads teks tanpa gambar tentang produk/solusi praktis ini:\n"
                     f"- Produk: {p_cur['product_name']}\n"
                     f"- Keunggulan: {p_cur.get('highlight', '')}\n"
-                    f"- Vibe: {vibe}\n\n"
+                    f"- Vibe: {vibe}\n{winning_context_prompt}\n\n"
                     f"Aturan penting:\n"
-                    f"1. BUKAN BAHASA BROSUR IKLAN. Tulis seperti tweet/Threads organik dari pengalaman pribadi atau observasi sehari-hari.\n"
-                    f"2. Gaya santai, mengalir, variatif, dan hindari kata klise sales.\n"
+                    f"1. BUKAN BAHASA BROSUR. Tulis seperti tweet/Threads organik dari pengalaman pribadi.\n"
+                    f"2. Gaya santai, mengalir, variatif, dan hindari kata klise jualan.\n"
                     f"3. Jangan taruh link di postingan utama.\n"
-                    f"4. Maksimal 300 karakter. Langsung tulis postingan tanpa tanda kutip."
+                    f"4. Maksimal 300 karakter tanpa tanda kutip."
                 )
                 main_txt = call_gemini(prompt)
                 closing = random.choice(REPLY_STARTERS)
@@ -324,7 +503,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     for row_item in new_rows:
         data_ws.append_row(row_item)
 
-    print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] ✅ Berhasil membuat {len(new_rows)} postingan organik Threads untuk hari ini!")
+    print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] ✅ Berhasil membuat {len(new_rows)} postingan dengan pola AI Self-Learning!")
 
 def wait_for_container(container_id: str, access_token: str, max_wait: int = 150) -> bool:
     url = f"https://graph.threads.net/v1.0/{container_id}?fields=status,error_message&access_token={access_token}"
@@ -450,14 +629,23 @@ def run_worker():
         name = str(a.get("name", "")).strip()
         uid = str(a.get("user_id", "")).strip()
         token = str(a.get("access_token", "")).strip()
+        cat = str(a.get("category", "")).strip()
         if name and uid and token:
-            accounts_map[name] = {"user_id": uid, "access_token": token}
+            accounts_map[name] = {"user_id": uid, "access_token": token, "category": cat}
 
+    # 1. Update Metrik Harian dari Threads API
+    try:
+        update_threads_insights(sh, accounts_map)
+    except Exception as e:
+        print(f"[INSIGHTS ERROR] Terjadi kendala saat update metrik: {e}")
+
+    # 2. Buat Draf Otomatis Berbasis Hasil Self-Learning
     try:
         auto_generate_today_drafts_if_needed(sh, accounts_map)
     except Exception as e:
         print(f"[AUTO-GEN ERROR] Terjadi kendala saat generate otomatis: {e}")
 
+    # 3. Terbitkan Konten yang Jadwalnya Sudah Tiba
     data_ws = sh.worksheet("data")
     rows = data_ws.get_all_values()
     if len(rows) <= 1:
