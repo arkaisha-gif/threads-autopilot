@@ -16,7 +16,7 @@ load_dotenv()
 TZ = pytz.timezone("Asia/Jakarta")
 
 # ==========================================
-# 🔐 PENGAMBILAN KREDENSIAL & SECRETS
+# PENGAMBILAN KREDENSIAL & SECRETS
 # ==========================================
 def get_secret(key, default=""):
     val = os.environ.get(key)
@@ -40,7 +40,7 @@ GCP_CREDS_BASE64 = get_secret("GCP_CREDS_BASE64")
 AI_API_KEY = get_secret("AI_API_KEY")
 
 # ==========================================
-# 🧠 MATRIKS VIBE & PROMPT THREADS
+# MATRIKS VIBE & PROMPT THREADS
 # ==========================================
 THREADS_VIBES = [
     "Capek mental / Realistis: gaya orang lelah yang males ribet, praktis, to the point.",
@@ -214,7 +214,7 @@ def get_sheets_client():
     return gspread.authorize(creds)
 
 # ==========================================
-# 📊 MODUL ANALITIK & AI SELF-LEARNING
+# MODUL ANALITIK & AI SELF-LEARNING
 # ==========================================
 def update_threads_insights(sh, accounts_map):
     data_ws = sh.worksheet("data")
@@ -225,7 +225,7 @@ def update_threads_insights(sh, accounts_map):
     now_dt = datetime.now(TZ)
     updated_count = 0
 
-    print(f"[{now_dt.strftime('%H:%M:%S')}] 🔍 Memeriksa postingan aktif untuk pembaruan metrik Threads...")
+    print(f"[{now_dt.strftime('%H:%M:%S')}] Memeriksa postingan aktif untuk pembaruan metrik Threads...")
 
     for idx, r in enumerate(rows[1:], start=2):
         while len(r) < 17:
@@ -306,7 +306,7 @@ def update_threads_insights(sh, accounts_map):
             print(f"[INSIGHTS WARN] Gagal menarik metrik post {main_id}: {ex}")
 
     if updated_count > 0:
-        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] 📈 Sukses memperbarui metrik untuk {updated_count} postingan!")
+        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] Sukses memperbarui metrik untuk {updated_count} postingan!")
 
 def extract_self_learning_patterns(rows):
     if len(rows) <= 1:
@@ -332,18 +332,15 @@ def extract_self_learning_patterns(rows):
     if not posted_rows:
         return {"winning_copies": [], "winning_products": {}, "top_hour_slots": []}
 
-    # 1. Winning Copies: 3 post dengan views terbanyak
     sorted_by_views = sorted(posted_rows, key=lambda x: x["views"], reverse=True)
     top_copies = [x["text"] for x in sorted_by_views[:3] if x["views"] > 0]
 
-    # 2. Winning Products
     product_views = {}
     for x in posted_rows:
         link = x["aff_link"]
         if link:
             product_views[link] = product_views.get(link, 0) + x["views"]
 
-    # 3. Peak Hours
     hour_views = {}
     hour_counts = {}
     for x in posted_rows:
@@ -367,7 +364,7 @@ def extract_self_learning_patterns(rows):
     }
 
 # ==========================================
-# ⚙️ PEMBUATAN DRAF OTOMATIS (MULTI-AKUN DINAMIS)
+# PEMBUATAN DRAF OTOMATIS (MULTI-AKUN DINAMIS)
 # ==========================================
 def auto_generate_today_drafts_if_needed(sh, accounts_map):
     now_dt = datetime.now(TZ)
@@ -383,16 +380,14 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                 today_rows_count += 1
 
     if today_rows_count > 0:
-        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] ℹ️ Draf tanggal {today_str} sudah ada ({today_rows_count} baris di sheet). Pembuatan draf baru dilewati.")
+        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] Draf tanggal {today_str} sudah ada ({today_rows_count} baris di sheet). Pembuatan draf baru dilewati.")
         return
 
-    # 1. BACA DINAMIS SEMUA AKUN DARI TAB ACCOUNTS
     active_accounts = list(accounts_map.keys())
     if not active_accounts:
-        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] ⚠️ Tab Accounts kosong! Daftarkan akun terlebih dahulu.")
+        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] Tab Accounts kosong! Daftarkan akun terlebih dahulu.")
         return
 
-    # 2. BACA DINAMIS ANGKA DARI CONFIG (YANG DI-SET DARI STREAMLIT)
     cfg_ws = sh.worksheet("Config")
     cfg_rows = cfg_ws.get_all_values()
     cfg_data = {r[0].strip(): r[1].strip() for r in cfg_rows if len(r) >= 2 and r[0].strip()}
@@ -403,7 +398,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         start_date = datetime.strptime(start_str.split()[0], "%Y-%m-%d").date()
         end_date = datetime.strptime(end_str.split()[0], "%Y-%m-%d").date()
         if not (start_date <= now_dt.date() <= end_date):
-            print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] ⚠️ Hari ini di luar rentang aktif Config. Lewati.")
+            print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] Hari ini di luar rentang aktif Config. Lewati.")
             return
     except Exception as e:
         print(f"[AUTO-GEN WARN] Gagal cek tanggal: {e}")
@@ -415,7 +410,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     except Exception:
         daily_viral, daily_text, daily_video = 0, 0, 25
 
-    # Angka per akun dari Streamlit (bebas mau 25 atau 50)
     posts_per_account = daily_viral + daily_text + daily_video
     if posts_per_account <= 0:
         posts_per_account = 25
@@ -427,11 +421,373 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     end_clock = cfg_data.get("end_time", "23:45")
 
     total_semua_post = posts_per_account * len(active_accounts)
-    print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] 📅 Menyusun Draf: {len(active_accounts)} Akun x {posts_per_account} Post = TOTAL {total_semua_post} POSTINGAN ({today_str})...")
+    print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] Menyusun Draf: {len(active_accounts)} Akun x {posts_per_account} Post = TOTAL {total_semua_post} POSTINGAN ({today_str})...")
 
     prod_ws = sh.worksheet("Products")
     all_prods = prod_ws.get_all_records()
     ready_prods = [p for p in all_prods if str(p.get("status", "")).strip().upper() == "READY"]
 
     if not ready_prods:
-        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] ⚠️ Tab
+        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] Tab Products tidak memiliki produk berstatus READY.")
+        return
+
+    learnings = extract_self_learning_patterns(existing_rows)
+    winning_copies = learnings["winning_copies"]
+    winning_products_map = learnings["winning_products"]
+    top_hours = learnings["top_hour_slots"]
+
+    winning_context_prompt = ""
+    if winning_copies:
+        formatted_examples = "\n---\n".join(winning_copies)
+        winning_context_prompt = (
+            f"\n\n[CONTOH POSTINGAN DENGAN VIEWS TERTINGGI SEBELUMNYA]:\n"
+            f"{formatted_examples}\n"
+            f"Instruksi Khusus AI: Pelajari ritme tulisan, sudut pandang, dan cara penyampaian santai di atas. "
+            f"Gunakan energi serupa untuk produk di bawah ini tanpa menjiplak teks kata per kata!"
+        )
+
+    prods_with_media = [p for p in ready_prods if str(p.get("media_url", "")).strip()]
+    prods_text_only = [p for p in ready_prods if not str(p.get("media_url", "")).strip()] or ready_prods
+
+    def pick_weighted_product(prod_list):
+        if not prod_list:
+            return random.choice(ready_prods)
+        weights = []
+        for p in prod_list:
+            link = str(p.get("affiliate_link", "")).strip()
+            vw = winning_products_map.get(link, None)
+            if vw is None:
+                w = 3.5
+            elif vw == 0:
+                w = 1.2
+            else:
+                w = 1.0 + min(vw / 120.0, 6.0)
+            weights.append(w)
+        return random.choices(prod_list, weights=weights, k=1)[0]
+
+    new_rows = []
+
+    for acc_idx, acc_name in enumerate(active_accounts):
+        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] Menyiapkan {posts_per_account} konten untuk @{acc_name}...")
+
+        start_h, start_m = map(int, start_clock.split(":"))
+        offset_m = start_m + (acc_idx * 2)
+        staggered_start = f"{start_h + (offset_m // 60):02d}:{offset_m % 60:02d}"
+
+        slots = generate_slots(posts_per_account, start_time_str=staggered_start, end_time_str=end_clock)
+        types_list = arrange_post_types_3way(daily_viral, daily_text, daily_video)
+
+        for slot_time, p_type in zip(slots, types_list):
+            vibe = random.choice(THREADS_VIBES)
+
+            try:
+                curr_hour = int(slot_time.split(":")[0])
+                if top_hours and curr_hour in top_hours[:4] and prods_with_media:
+                    p_type = "video"
+            except Exception:
+                pass
+
+            if p_type == "viral":
+                topik = random.choice(VIRAL_OBSERVATIONS)
+                prompt_v = (
+                    f"Kamu adalah user Threads Indonesia yang witty, santai, dan relatable.\n"
+                    f"Tulis 1 postingan Threads yang memicu orang berkomentar atau repost tentang: '{topik}'.\n"
+                    f"Vibe: {vibe}.\n{winning_context_prompt}\n\n"
+                    f"Pedoman: Gaya bahasa obrolan santai, huruf kecil/punchline di awal, maksimal 220 karakter tanpa tanda kutip."
+                )
+                p_text = call_gemini(prompt_v)
+                new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(p_text), "", "", "", "PENDING", "", "", "", ""])
+
+            elif p_type == "video":
+                p_cur = pick_weighted_product(prods_with_media) if prods_with_media else pick_weighted_product(ready_prods)
+                prompt = (
+                    f"Kamu adalah pengguna Threads Indonesia yang aktif, santai, dan autentik.\n"
+                    f"Tulis draf Threads pengantar video penahan jempol untuk produk ini:\n"
+                    f"- Produk: {p_cur['product_name']}\n"
+                    f"- Manfaat/Highlight: {p_cur.get('highlight', '')}\n"
+                    f"- Gaya/Vibe: {vibe}\n{winning_context_prompt}\n\n"
+                    f"Aturan Postingan Utama:\n"
+                    f"1. BUKAN BAHASA IKLAN/SALES. Buat penonton sadar alat/barang ini solusi nyata yang dijual murah di Shopee.\n"
+                    f"2. Sambungkan ke masalah nyata sehari-hari secara relatable.\n"
+                    f"3. JANGAN taruh link di postingan utama.\n"
+                    f"4. Maksimal 290 karakter tanpa tanda kutip.\n\n"
+                    f"Aturan Balasan CTA (Reply):\n"
+                    f"1. Tulis 1 kalimat balasan singkat yang SANGAT MEMICU ORANG MENGEKLIK LINK SHOPEE.\n"
+                    f"2. Gunakan pemicu psikologis: anti-zonk/cari yang original, heran harganya murah, atau link toko resmi.\n"
+                    f"3. Dilarang pakai template kaku. Maksimal 110 karakter tanpa URL.\n\n"
+                    f"FORMAT OUTPUT WAJIB (Pisahkan dengan '---REPLY_CTA---'):\n"
+                    f"[Teks postingan utama]\n"
+                    f"---REPLY_CTA---\n"
+                    f"[Teks balasan CTA tanpa link]"
+                )
+                raw_out = call_gemini(prompt)
+                if "---REPLY_CTA---" in raw_out:
+                    parts = raw_out.split("---REPLY_CTA---", 1)
+                    main_txt = parts[0].strip()
+                    cta_txt = parts[1].strip()
+                else:
+                    main_txt = raw_out.strip()
+                    cta_txt = random.choice(FALLBACK_CTA_STARTERS)
+
+                aff_reply = f"{cta_txt}\n{p_cur['affiliate_link']}"
+                media_formatted = prepare_media_for_post(str(p_cur.get("media_url", "")).strip(), duplicate_single_video=True)
+                new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(main_txt), media_formatted, sanitize_threads_text(aff_reply), p_cur['affiliate_link'], "PENDING", "", "", "", ""])
+
+            else:
+                p_cur = pick_weighted_product(prods_text_only)
+                prompt = (
+                    f"Kamu adalah pengguna Threads Indonesia yang aktif dan santai.\n"
+                    f"Tulis 1 postingan Threads teks tanpa gambar tentang solusi praktis ini:\n"
+                    f"- Produk: {p_cur['product_name']}\n"
+                    f"- Keunggulan: {p_cur.get('highlight', '')}\n"
+                    f"- Vibe: {vibe}\n{winning_context_prompt}\n\n"
+                    f"FORMAT OUTPUT WAJIB (Pisahkan dengan '---REPLY_CTA---'):\n"
+                    f"[Teks postingan utama]\n"
+                    f"---REPLY_CTA---\n"
+                    f"[Teks balasan CTA tanpa link]"
+                )
+                raw_out = call_gemini(prompt)
+                if "---REPLY_CTA---" in raw_out:
+                    parts = raw_out.split("---REPLY_CTA---", 1)
+                    main_txt = parts[0].strip()
+                    cta_txt = parts[1].strip()
+                else:
+                    main_txt = raw_out.strip()
+                    cta_txt = random.choice(FALLBACK_CTA_STARTERS)
+
+                aff_reply = f"{cta_txt}\n{p_cur['affiliate_link']}"
+                new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(main_txt), "", sanitize_threads_text(aff_reply), p_cur['affiliate_link'], "PENDING", "", "", "", ""])
+
+            time.sleep(0.5)
+
+    new_rows.sort(key=lambda x: x[1])
+
+    if new_rows:
+        try:
+            data_ws.append_rows(new_rows)
+            print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] SUKSES! {len(new_rows)} postingan berhasil disimpan untuk {len(active_accounts)} akun.")
+        except Exception as e_batch:
+            print(f"[WARN] Batch insert gagal ({e_batch}), mencoba simpan bertahap...")
+            for r_item in new_rows:
+                data_ws.append_row(r_item)
+                time.sleep(0.3)
+
+# ==========================================
+# MODUL PUBLIKASI KE THREADS API
+# ==========================================
+def wait_for_container(container_id: str, access_token: str, max_wait: int = 150) -> bool:
+    url = f"https://graph.threads.net/v1.0/{container_id}?fields=status,error_message&access_token={access_token}"
+    start = time.time()
+    time.sleep(3)
+    while time.time() - start < max_wait:
+        try:
+            res = requests.get(url, timeout=15).json()
+            status = res.get("status")
+            if status == "FINISHED":
+                return True
+            if status == "ERROR":
+                print(f"[CONTAINER ERROR] {res.get('error_message')}")
+                return False
+        except Exception as e:
+            print(f"[POLL RETRY] {e}")
+        time.sleep(4)
+    return False
+
+def create_single_media_container(user_id: str, access_token: str, media_url: str, text: str = "", is_carousel_item: bool = False, reply_to_id: str = "") -> str:
+    is_video = any(media_url.lower().endswith(ext) for ext in [".mp4", ".mov", ".m4v"]) or "/video/upload/" in media_url
+    endpoint = f"https://graph.threads.net/v1.0/{user_id}/threads"
+    params = {
+        "media_type": "VIDEO" if is_video else "IMAGE",
+        "access_token": access_token
+    }
+    if is_video:
+        params["video_url"] = media_url
+    else:
+        params["image_url"] = media_url
+
+    if is_carousel_item:
+        params["is_carousel_item"] = "true"
+    else:
+        if text:
+            params["text"] = sanitize_threads_text(text)
+        if reply_to_id:
+            params["reply_to_id"] = reply_to_id
+
+    res = requests.post(endpoint, data=params, timeout=30).json()
+    if "id" not in res:
+        raise Exception(f"Gagal buat media container: {res}")
+    return res["id"]
+
+def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: str = "", reply_to_id: str = "") -> str:
+    text = sanitize_threads_text(text)
+    media_list = [m.strip() for m in str(media_raw).split(",") if m.strip()]
+    container_id = ""
+
+    if len(media_list) > 1:
+        child_ids = []
+        for m_url in media_list:
+            c_id = create_single_media_container(user_id, access_token, m_url, is_carousel_item=True)
+            if not wait_for_container(c_id, access_token):
+                raise Exception(f"Media carousel item {c_id} belum siap diproses Meta")
+            child_ids.append(c_id)
+
+        car_params = {
+            "media_type": "CAROUSEL",
+            "children": ",".join(child_ids),
+            "text": text,
+            "access_token": access_token
+        }
+        if reply_to_id:
+            car_params["reply_to_id"] = reply_to_id
+
+        car_res = requests.post(f"https://graph.threads.net/v1.0/{user_id}/threads", data=car_params, timeout=30).json()
+        if "id" not in car_res:
+            raise Exception(f"Gagal buat container carousel: {car_res}")
+        container_id = car_res["id"]
+
+        if not wait_for_container(container_id, access_token):
+            raise Exception(f"Container carousel {container_id} belum siap")
+
+    elif len(media_list) == 1:
+        m_url = media_list[0]
+        container_id = create_single_media_container(user_id, access_token, m_url, text=text, reply_to_id=reply_to_id)
+        if not wait_for_container(container_id, access_token):
+            raise Exception(f"Container media {container_id} belum siap")
+    else:
+        text_params = {
+            "media_type": "TEXT",
+            "text": text,
+            "access_token": access_token
+        }
+        if reply_to_id:
+            text_params["reply_to_id"] = reply_to_id
+        res = requests.post(f"https://graph.threads.net/v1.0/{user_id}/threads", data=text_params, timeout=30).json()
+        if "id" not in res:
+            raise Exception(f"Gagal buat text container: {res}")
+        container_id = res["id"]
+        time.sleep(2)
+
+    pub_url = f"https://graph.threads.net/v1.0/{user_id}/threads_publish"
+    pub_res = {}
+    for attempt in range(5):
+        time.sleep(3)
+        r = requests.post(pub_url, data={"creation_id": container_id, "access_token": access_token}, timeout=30)
+        pub_res = r.json()
+        if "id" in pub_res:
+            return pub_res["id"]
+
+        err = pub_res.get("error", {})
+        err_sub = err.get("error_subcode")
+        err_msg = str(err.get("message", ""))
+        if err_sub == 4279009 or "does not exist" in err_msg.lower():
+            print(f"[RETRY PUBLISH {attempt + 1}/5] Container {container_id} sedang dirakit Meta, jeda 6 detik...")
+            time.sleep(6)
+        else:
+            break
+
+    raise Exception(f"Gagal publish container {container_id}: {pub_res}")
+
+# ==========================================
+# RUNNER UTAMA
+# ==========================================
+def run_worker():
+    print(f"[{datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')} WIB] Memeriksa jadwal antrean...")
+    client = get_sheets_client()
+    sh = client.open_by_key(SPREADSHEET_ID)
+
+    acc_ws = sh.worksheet("Accounts")
+    acc_records = acc_ws.get_all_records()
+    accounts_map = {}
+    for a in acc_records:
+        name = str(a.get("name", "")).strip()
+        uid = str(a.get("user_id", "")).strip()
+        token = str(a.get("access_token", "")).strip()
+        if name and uid and token:
+            accounts_map[name] = {"user_id": uid, "access_token": token}
+
+    try:
+        update_threads_insights(sh, accounts_map)
+    except Exception as e:
+        print(f"[INSIGHTS ERROR] Terjadi kendala saat update metrik: {e}")
+
+    try:
+        auto_generate_today_drafts_if_needed(sh, accounts_map)
+    except Exception as e:
+        print(f"[AUTO-GEN ERROR] Terjadi kendala saat generate otomatis: {e}")
+
+    data_ws = sh.worksheet("data")
+    rows = data_ws.get_all_values()
+    if len(rows) <= 1:
+        print("Tabel data kosong.")
+        return
+
+    now_dt = datetime.now(TZ)
+
+    for idx, r in enumerate(rows[1:], start=2):
+        while len(r) < 12:
+            r.append("")
+
+        post_date = r[0].strip()
+        post_time = r[1].strip()
+        target_acc = r[2].strip()
+        main_text = r[3].strip()
+        media_url = r[4].strip()
+        reply_chain_text = r[5].strip()
+        aff_link = r[6].strip()
+        status = r[7].strip().upper()
+        target_hijack_id = r[11].strip()
+
+        if status != "PENDING" or not main_text:
+            continue
+
+        try:
+            m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", post_date)
+            t_m = re.match(r"^(\d{1,2}):(\d{1,2})", post_time)
+            if not m or not t_m:
+                continue
+            p_dt = TZ.localize(datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(t_m.group(1)), int(t_m.group(2))))
+        except Exception:
+            continue
+
+        if p_dt > now_dt:
+            continue
+
+        acc_info = accounts_map.get(target_acc)
+        if not acc_info:
+            err = f"Akun '{target_acc}' tidak ditemukan di Accounts"
+            print(f"[ROW {idx}] {err}")
+            data_ws.update_cell(idx, 8, "ERROR")
+            data_ws.update_cell(idx, 10, err)
+            continue
+
+        u_id = acc_info["user_id"]
+        tok = acc_info["access_token"]
+
+        print(f"[ROW {idx}] Memproses postingan untuk @{target_acc}...")
+        try:
+            main_id = publish_threads_post(u_id, tok, text=main_text, media_raw=media_url, reply_to_id=target_hijack_id)
+            print(f"[ROW {idx}] Utama sukses: {main_id}")
+
+            current_parent = main_id
+            if reply_chain_text:
+                replies = [rep.strip() for rep in reply_chain_text.split("---REPLY---") if rep.strip()]
+                for rep_item in replies:
+                    time.sleep(3)
+                    safe_reply = sanitize_threads_text(rep_item)
+                    rep_id = publish_threads_post(u_id, tok, text=safe_reply, media_raw="", reply_to_id=current_parent)
+                    current_parent = rep_id
+                    print(f"[ROW {idx}] Balasan terbit: {rep_id}")
+
+            data_ws.update_cell(idx, 8, "POSTED")
+            data_ws.update_cell(idx, 9, main_id)
+            data_ws.update_cell(idx, 10, "")
+            data_ws.update_cell(idx, 11, datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"))
+
+        except Exception as ex:
+            err_msg = str(ex)[:200]
+            print(f"[ROW {idx}] GAGAL: {err_msg}")
+            data_ws.update_cell(idx, 8, "ERROR")
+            data_ws.update_cell(idx, 10, err_msg)
+
+if __name__ == "__main__":
+    run_worker()
