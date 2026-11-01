@@ -554,11 +554,11 @@ with tabs[0]:
     st.write("##### 🎯 Porsi Konten Harian (Video, Teks, Viral)")
     col_q1, col_q2, col_q3 = st.columns(3)
     with col_q1:
-        sel_video = st.number_input("🎬 Produk Video / Gambar", 0, 15, cur_video_count)
+        sel_video = st.number_input("🎬 Produk Video / Gambar", 0, 50, cur_video_count)
     with col_q2:
-        sel_text = st.number_input("📝 Produk Teks Saja", 0, 15, cur_text_count)
+        sel_text = st.number_input("📝 Produk Teks Saja", 0, 50, cur_text_count)
     with col_q3:
-        sel_viral = st.number_input("🚀 Konten Viral Booster", 0, 10, cur_viral_count)
+        sel_viral = st.number_input("🚀 Konten Viral Booster", 0, 50, cur_viral_count)
 
     auto_dup_video = st.checkbox("🎬 Trik Thumbnail: Jika produk hanya punya 1 video, kirim jadi 2 video (Carousel)", value=True)
 
