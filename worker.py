@@ -563,4 +563,239 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                     main_txt = raw_out.strip()
                     cta_txt = random.choice(FALLBACK_CTA_STARTERS)
 
-                aff_reply
+                aff_reply = f"{cta_txt}\n{p_cur['affiliate_link']}"
+                new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(main_txt), "", sanitize_threads_text(aff_reply), p_cur['affiliate_link'], "PENDING", "", "", "", ""])
+
+            time.sleep(0.3)
+
+    new_rows.sort(key=lambda x: x[1])
+
+    if new_rows:
+        try:
+            data_ws.append_rows(new_rows)
+            print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] SUKSES! {len(new_rows)} postingan berhasil disimpan untuk akun: {', '.join(accounts_to_generate)}.")
+        except Exception as e_batch:
+            print(f"[WARN] Batch insert gagal ({e_batch}), mencoba simpan bertahap...")
+            for r_item in new_rows:
+                data_ws.append_row(r_item)
+                time.sleep(0.3)
+
+# ==========================================
+# MODUL PUBLIKASI KE THREADS API
+# ==========================================
+def wait_for_container(container_id: str, access_token: str, max_wait: int = 150) -> bool:
+    url = f"https://graph.threads.net/v1.0/{container_id}?fields=status,error_message&access_token={access_token}"
+    start = time.time()
+    time.sleep(3)
+    while time.time() - start < max_wait:
+        try:
+            res = requests.get(url, timeout=15).json()
+            status = res.get("status")
+            if status == "FINISHED":
+                return True
+            if status == "ERROR":
+                print(f"[CONTAINER ERROR] {res.get('error_message')}")
+                return False
+        except Exception as e:
+            print(f"[POLL RETRY] {e}")
+        time.sleep(4)
+    return False
+
+def create_single_media_container(user_id: str, access_token: str, media_url: str, text: str = "", is_carousel_item: bool = False, reply_to_id: str = "") -> str:
+    is_video = any(media_url.lower().endswith(ext) for ext in [".mp4", ".mov", ".m4v"]) or "/video/upload/" in media_url
+    endpoint = f"https://graph.threads.net/v1.0/{user_id}/threads"
+    params = {
+        "media_type": "VIDEO" if is_video else "IMAGE",
+        "access_token": access_token
+    }
+    if is_video:
+        params["video_url"] = media_url
+    else:
+        params["image_url"] = media_url
+
+    if is_carousel_item:
+        params["is_carousel_item"] = "true"
+    else:
+        if text:
+            params["text"] = sanitize_threads_text(text)
+        if reply_to_id:
+            params["reply_to_id"] = reply_to_id
+
+    res = requests.post(endpoint, data=params, timeout=30).json()
+    if "id" not in res:
+        raise Exception(f"Gagal buat media container: {res}")
+    return res["id"]
+
+def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: str = "", reply_to_id: str = "") -> str:
+    text = sanitize_threads_text(text)
+    media_list = [m.strip() for m in str(media_raw).split(",") if m.strip()]
+    container_id = ""
+
+    if len(media_list) > 1:
+        child_ids = []
+        for m_url in media_list:
+            c_id = create_single_media_container(user_id, access_token, m_url, is_carousel_item=True)
+            if not wait_for_container(c_id, access_token):
+                raise Exception(f"Media carousel item {c_id} belum siap diproses Meta")
+            child_ids.append(c_id)
+
+        car_params = {
+            "media_type": "CAROUSEL",
+            "children": ",".join(child_ids),
+            "text": text,
+            "access_token": access_token
+        }
+        if reply_to_id:
+            car_params["reply_to_id"] = reply_to_id
+
+        car_res = requests.post(f"https://graph.threads.net/v1.0/{user_id}/threads", data=car_params, timeout=30).json()
+        if "id" not in car_res:
+            raise Exception(f"Gagal buat container carousel: {car_res}")
+        container_id = car_res["id"]
+
+        if not wait_for_container(container_id, access_token):
+            raise Exception(f"Container carousel {container_id} belum siap")
+
+    elif len(media_list) == 1:
+        m_url = media_list[0]
+        container_id = create_single_media_container(user_id, access_token, m_url, text=text, reply_to_id=reply_to_id)
+        if not wait_for_container(container_id, access_token):
+            raise Exception(f"Container media {container_id} belum siap")
+    else:
+        text_params = {
+            "media_type": "TEXT",
+            "text": text,
+            "access_token": access_token
+        }
+        if reply_to_id:
+            text_params["reply_to_id"] = reply_to_id
+        res = requests.post(f"https://graph.threads.net/v1.0/{user_id}/threads", data=text_params, timeout=30).json()
+        if "id" not in res:
+            raise Exception(f"Gagal buat text container: {res}")
+        container_id = res["id"]
+        time.sleep(2)
+
+    pub_url = f"https://graph.threads.net/v1.0/{user_id}/threads_publish"
+    pub_res = {}
+    for attempt in range(5):
+        time.sleep(3)
+        r = requests.post(pub_url, data={"creation_id": container_id, "access_token": access_token}, timeout=30)
+        pub_res = r.json()
+        if "id" in pub_res:
+            return pub_res["id"]
+
+        err = pub_res.get("error", {})
+        err_sub = err.get("error_subcode")
+        err_msg = str(err.get("message", ""))
+        if err_sub == 4279009 or "does not exist" in err_msg.lower():
+            print(f"[RETRY PUBLISH {attempt + 1}/5] Container {container_id} sedang dirakit Meta, jeda 6 detik...")
+            time.sleep(6)
+        else:
+            break
+
+    raise Exception(f"Gagal publish container {container_id}: {pub_res}")
+
+# ==========================================
+# RUNNER UTAMA
+# ==========================================
+def run_worker():
+    print(f"[{datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')} WIB] Memeriksa jadwal antrean...")
+    client = get_sheets_client()
+    sh = client.open_by_key(SPREADSHEET_ID)
+
+    acc_ws = sh.worksheet("Accounts")
+    acc_records = acc_ws.get_all_records()
+    accounts_map = {}
+    for a in acc_records:
+        name = str(a.get("name", "")).strip()
+        uid = str(a.get("user_id", "")).strip()
+        token = str(a.get("access_token", "")).strip()
+        if name and uid and token:
+            accounts_map[name] = {"user_id": uid, "access_token": token}
+
+    try:
+        update_threads_insights(sh, accounts_map)
+    except Exception as e:
+        print(f"[INSIGHTS ERROR] Terjadi kendala saat update metrik: {e}")
+
+    try:
+        auto_generate_today_drafts_if_needed(sh, accounts_map)
+    except Exception as e:
+        print(f"[AUTO-GEN ERROR] Terjadi kendala saat generate otomatis: {e}")
+
+    data_ws = sh.worksheet("data")
+    rows = data_ws.get_all_values()
+    if len(rows) <= 1:
+        print("Tabel data kosong.")
+        return
+
+    now_dt = datetime.now(TZ)
+
+    for idx, r in enumerate(rows[1:], start=2):
+        while len(r) < 12:
+            r.append("")
+
+        post_date = r[0].strip()
+        post_time = r[1].strip()
+        target_acc = r[2].strip()
+        main_text = r[3].strip()
+        media_url = r[4].strip()
+        reply_chain_text = r[5].strip()
+        aff_link = r[6].strip()
+        status = r[7].strip().upper()
+        target_hijack_id = r[11].strip()
+
+        if status != "PENDING" or not main_text:
+            continue
+
+        try:
+            m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", post_date)
+            t_m = re.match(r"^(\d{1,2}):(\d{1,2})", post_time)
+            if not m or not t_m:
+                continue
+            p_dt = TZ.localize(datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(t_m.group(1)), int(t_m.group(2))))
+        except Exception:
+            continue
+
+        if p_dt > now_dt:
+            continue
+
+        acc_info = accounts_map.get(target_acc)
+        if not acc_info:
+            err = f"Akun '{target_acc}' tidak ditemukan di Accounts"
+            print(f"[ROW {idx}] {err}")
+            data_ws.update_cell(idx, 8, "ERROR")
+            data_ws.update_cell(idx, 10, err)
+            continue
+
+        u_id = acc_info["user_id"]
+        tok = acc_info["access_token"]
+
+        print(f"[ROW {idx}] Memproses postingan untuk @{target_acc}...")
+        try:
+            main_id = publish_threads_post(u_id, tok, text=main_text, media_raw=media_url, reply_to_id=target_hijack_id)
+            print(f"[ROW {idx}] Utama sukses: {main_id}")
+
+            current_parent = main_id
+            if reply_chain_text:
+                replies = [rep.strip() for rep in reply_chain_text.split("---REPLY---") if rep.strip()]
+                for rep_item in replies:
+                    time.sleep(3)
+                    safe_reply = sanitize_threads_text(rep_item)
+                    rep_id = publish_threads_post(u_id, tok, text=safe_reply, media_raw="", reply_to_id=current_parent)
+                    current_parent = rep_id
+                    print(f"[ROW {idx}] Balasan terbit: {rep_id}")
+
+            data_ws.update_cell(idx, 8, "POSTED")
+            data_ws.update_cell(idx, 9, main_id)
+            data_ws.update_cell(idx, 10, "")
+            data_ws.update_cell(idx, 11, datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"))
+
+        except Exception as ex:
+            err_msg = str(ex)[:200]
+            print(f"[ROW {idx}] GAGAL: {err_msg}")
+            data_ws.update_cell(idx, 8, "ERROR")
+            data_ws.update_cell(idx, 10, err_msg)
+
+if __name__ == "__main__":
+    run_worker()
