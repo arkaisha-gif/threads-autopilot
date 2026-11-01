@@ -203,7 +203,8 @@ def parse_dt(s: str) -> datetime:
     y, mo, d, h, mi = map(int, m.groups())
     return TZ.localize(datetime(y, mo, d, h, mi))
 
-def generate_slots(total_count, start_time_str="08:15", end_time_str="21:30"):
+# Default diatur 04:30 sampai 23:45
+def generate_slots(total_count, start_time_str="04:30", end_time_str="23:45"):
     if total_count <= 0:
         return []
     if total_count == 1:
@@ -212,10 +213,14 @@ def generate_slots(total_count, start_time_str="08:15", end_time_str="21:30"):
     h2, m2 = map(int, end_time_str.split(":"))
     start_minutes = h1 * 60 + m1
     end_minutes = h2 * 60 + m2
+    if end_minutes <= start_minutes:
+        end_minutes = 23 * 60 + 45
     step = (end_minutes - start_minutes) / (total_count - 1)
     slots = []
     for i in range(total_count):
         curr_m = 5 * round(int(round(start_minutes + i * step)) / 5)
+        if curr_m >= 24 * 60:
+            curr_m = 23 * 60 + 45
         slots.append(f"{curr_m // 60:02d}:{curr_m % 60:02d}")
     return slots
 
@@ -449,14 +454,15 @@ except Exception as e:
         st.error(f"Gagal memuat data Google Sheets: {e}")
     st.stop()
 
-# Tab Menu
+# Tab Menu (Analisa Data diletakkan di tab terakhir)
 tabs = st.tabs([
     "⚡ Kontrol Autopilot",
     "🎯 Hijack Thread Viral",
     "📦 Katalog Produk (50+ Items)",
     "✍️ Content Studio (Manual & AI)",
     "📋 Antrean & Riwayat",
-    "⚙️ Akun Threads & Diagnostik"
+    "⚙️ Akun Threads & Diagnostik",
+    "📊 Analisa Data & AI"
 ])
 
 # ==============================================================================
@@ -466,27 +472,27 @@ with tabs[0]:
     st.subheader("Pengaturan Jadwal & Komposisi Harian Autopilot")
     st.write("Atur tanggal aktif, rasio harian (**Video**, **Teks**, **Viral**), dan **gaya penulisan AI**.")
 
-    raw_start = cfg_data.get("start_datetime", "2026-09-06 00:00")
-    raw_end = cfg_data.get("end_datetime", "2026-09-30 22:00")
+    raw_start = cfg_data.get("start_datetime", "2026-01-01 04:30")
+    raw_end = cfg_data.get("end_datetime", "2026-12-31 23:45")
     
     try:
-        cur_viral_count = int(cfg_data.get("daily_viral_count", 2))
+        cur_viral_count = int(cfg_data.get("daily_viral_count", 0))
     except:
-        cur_viral_count = 2
+        cur_viral_count = 0
 
     try:
-        cur_text_count = int(cfg_data.get("daily_text_count", 2))
+        cur_text_count = int(cfg_data.get("daily_text_count", 0))
     except:
-        cur_text_count = 2
+        cur_text_count = 0
 
     try:
-        cur_video_count = int(cfg_data.get("daily_video_count", 4))
+        cur_video_count = int(cfg_data.get("daily_video_count", 20))
     except:
-        cur_video_count = 4
+        cur_video_count = 20
 
     cur_target_acc = cfg_data.get("target_autopilot_account", "-- Semua Akun (All Accounts) --")
-    cur_reply_mode = cfg_data.get("reply_mode", "🎲 Acak (1 - 3 Balasan)")
-    cur_length_bias = cfg_data.get("length_bias", "Dominan Sedang (Lebih banyak standar)")
+    cur_reply_mode = cfg_data.get("reply_mode", "1 Balasan (Hanya Link)")
+    cur_length_bias = cfg_data.get("length_bias", "Dominan Pendek (Lebih banyak ringkas)")
     cur_ai_style = cfg_data.get("ai_style", "Serahkan ke AI (Smart Adaptive / Acak Tiap Post)")
 
     now = datetime.now(TZ)
@@ -534,7 +540,7 @@ with tabs[0]:
         try:
             def_start_time = parse_dt(raw_start).time()
         except:
-            def_start_time = time(0, 0)
+            def_start_time = time(4, 30)
         start_t = st.time_input("Jam Mulai (Start Time)", value=def_start_time)
 
     col_d2, col_t2 = st.columns(2)
@@ -548,17 +554,17 @@ with tabs[0]:
         try:
             def_end_time = parse_dt(raw_end).time()
         except:
-            def_end_time = time(22, 0)
+            def_end_time = time(23, 45)
         end_t = st.time_input("Jam Berakhir (End Time)", value=def_end_time)
 
-    st.write("##### 🎯 Porsi Konten Harian (Video, Teks, Viral)")
+    st.write("##### 🎯 Porsi Konten Harian (Maksimal s/d 50 Post)")
     col_q1, col_q2, col_q3 = st.columns(3)
     with col_q1:
-        sel_video = st.number_input("🎬 Produk Video / Gambar", 0, 15, cur_video_count)
+        sel_video = st.number_input("🎬 Produk Video / Gambar", 0, 50, min(max(cur_video_count, 0), 50))
     with col_q2:
-        sel_text = st.number_input("📝 Produk Teks Saja", 0, 15, cur_text_count)
+        sel_text = st.number_input("📝 Produk Teks Saja", 0, 50, min(max(cur_text_count, 0), 50))
     with col_q3:
-        sel_viral = st.number_input("🚀 Konten Viral Booster", 0, 10, cur_viral_count)
+        sel_viral = st.number_input("🚀 Konten Viral Booster", 0, 50, min(max(cur_viral_count, 0), 50))
 
     auto_dup_video = st.checkbox("🎬 Trik Thumbnail: Jika produk hanya punya 1 video, kirim jadi 2 video (Carousel)", value=True)
 
@@ -585,10 +591,10 @@ with tabs[0]:
 
     st.write("##### 💬 Format Rantai Balasan (Reply Chain)")
     reply_mode_options = [
+        "1 Balasan (Hanya Link)",
         "🎲 Acak (1 - 3 Balasan)",
         "🎲 Acak (1 - 5 Balasan)",
         "🎲 Acak (2 - 4 Balasan)",
-        "1 Balasan (Hanya Link)",
         "2 Balasan (1 Cerita + Link)",
         "3 Balasan (2 Cerita + Link)"
     ]
@@ -596,7 +602,7 @@ with tabs[0]:
     sel_reply_mode_ap = st.selectbox("Pilih Format Balasan Utas:", reply_mode_options, index=def_rep_idx)
 
     total_plan = sel_video + sel_text + sel_viral
-    preview_slots = generate_slots(total_plan)
+    preview_slots = generate_slots(total_plan, start_time_str=start_t.strftime("%H:%M"), end_time_str=end_t.strftime("%H:%M"))
     preview_types = arrange_post_types_3way(sel_viral, sel_text, sel_video)
 
     type_labels = {"viral": "Viral 🚀", "video": "Video 🎬", "text": "Teks 📝"}
@@ -614,9 +620,14 @@ with tabs[0]:
                 update_config_keys(sh_obj, {
                     "start_datetime": new_start_str,
                     "end_datetime": new_end_str,
+                    "start_time": start_t.strftime("%H:%M"),
+                    "end_time": end_t.strftime("%H:%M"),
                     "daily_viral_count": str(sel_viral),
                     "daily_text_count": str(sel_text),
                     "daily_video_count": str(sel_video),
+                    "count_viral": str(sel_viral),
+                    "count_aff_text": str(sel_text),
+                    "count_aff_media": str(sel_video),
                     "target_autopilot_account": str(sel_auto_acc),
                     "reply_mode": str(sel_reply_mode_ap),
                     "length_bias": str(sel_bias_autopilot),
@@ -956,11 +967,11 @@ with tabs[3]:
     if content_mode == "🎯 Paket Kombinasi Harian (Video + Teks + Viral)":
         ck1, ck2, ck3 = st.columns(3)
         with ck1:
-            cb_video = st.number_input("Jumlah Video", 0, 10, 4, key="cb_v")
+            cb_video = st.number_input("Jumlah Video", 0, 50, min(max(4, 0), 50), key="cb_v")
         with ck2:
-            cb_text = st.number_input("Jumlah Teks", 0, 10, 3, key="cb_t")
+            cb_text = st.number_input("Jumlah Teks", 0, 50, min(max(3, 0), 50), key="cb_t")
         with ck3:
-            cb_viral = st.number_input("Jumlah Viral", 0, 10, 3, key="cb_vi")
+            cb_viral = st.number_input("Jumlah Viral", 0, 50, min(max(3, 0), 50), key="cb_vi")
 
         cb_style = st.selectbox("Gaya Bahasa AI:", copy_styles, key="cb_style")
         cb_dup_video = st.checkbox("🎬 Trik Thumbnail 2 Video (Carousel)", value=True, key="cb_dup")
@@ -1150,7 +1161,7 @@ with tabs[4]:
 # TAB 6: AKUN THREADS & DIAGNOSTIK
 # ==============================================================================
 with tabs[5]:
-    st.subheader("⚙️️ Manajemen Akun Threads & Diagnostik")
+    st.subheader("⚙ Manajemen Akun Threads & Diagnostik")
     if acc_records:
         df_acc = pd.DataFrame(acc_records)
         if "access_token" in df_acc.columns:
@@ -1201,3 +1212,109 @@ with tabs[5]:
                     st.cache_data.clear()
                     st.success("✅ Akun tersimpan!")
                     st.rerun()
+
+# ==============================================================================
+# TAB 7: ANALISA DATA & AI SELF-LEARNING (TAB TERAKHIR)
+# ==============================================================================
+with tabs[6]:
+    st.subheader("📊 Analisa Engagement & AI Self-Learning")
+    st.caption("Pantau performa postingan riil dari Threads API. Data ini digunakan oleh AI untuk mengoptimalkan hook, balasan CTA, dan produk unggulan.")
+
+    if all_data:
+        df_an = pd.DataFrame(all_data)
+
+        # Cari kolom status secara dinamis
+        stat_col = next((c for c in df_an.columns if c.strip().lower() == "status"), None)
+        if stat_col:
+            df_posted = df_an[df_an[stat_col].astype(str).str.upper() == "POSTED"].copy()
+        else:
+            df_posted = df_an.copy()
+
+        # Konversi kolom numerik
+        for m in ["views", "likes", "replies", "reposts"]:
+            matched_col = next((c for c in df_an.columns if c.strip().lower() == m), None)
+            if matched_col:
+                df_posted[matched_col] = pd.to_numeric(
+                    df_posted[matched_col].astype(str).str.replace(",", "").replace("", "0"), 
+                    errors="coerce"
+                ).fillna(0).astype(int)
+
+        v_col = next((c for c in df_posted.columns if c.strip().lower() == "views"), None)
+        l_col = next((c for c in df_posted.columns if c.strip().lower() == "likes"), None)
+        r_col = next((c for c in df_posted.columns if c.strip().lower() == "replies"), None)
+        rp_col = next((c for c in df_posted.columns if c.strip().lower() == "reposts"), None)
+
+        tot_views = int(df_posted[v_col].sum()) if v_col else 0
+        tot_likes = int(df_posted[l_col].sum()) if l_col else 0
+        tot_rep = int(df_posted[r_col].sum()) if r_col else 0
+        tot_rp = int(df_posted[rp_col].sum()) if rp_col else 0
+        tot_success = len(df_posted)
+
+        c_an1, c_an2, c_an3, c_an4, c_an5 = st.columns(5)
+        c_an1.metric("Total Views", f"{tot_views:,}")
+        c_an2.metric("Total Likes", f"{tot_likes:,}")
+        c_an3.metric("Total Replies", f"{tot_rep:,}")
+        c_an4.metric("Total Reposts", f"{tot_rp:,}")
+        c_an5.metric("Post Sukses", f"{tot_success:,}")
+
+        st.divider()
+
+        col_left_an, col_right_an = st.columns(2)
+        with col_left_an:
+            st.write("##### 🏆 5 Postingan dengan Views Tertinggi (Winning Copies)")
+            st.caption("Pola tulisan & hook dari postingan ini dipelajari oleh Gemini AI untuk postingan baru:")
+            if v_col and not df_posted.empty and tot_views > 0:
+                top5 = df_posted.sort_values(by=v_col, ascending=False).head(5)
+                text_col = next((c for c in top5.columns if any(k in c.lower() for k in ["text", "main", "post"])), None)
+                reply_col = next((c for c in top5.columns if "reply" in c.lower()), None)
+                date_col = next((c for c in top5.columns if any(k in c.lower() for k in ["date", "tanggal"])), None)
+                time_col = next((c for c in top5.columns if any(k in c.lower() for k in ["time", "jam"])), None)
+
+                for _, row in top5.iterrows():
+                    v_val = int(row.get(v_col, 0))
+                    l_val = int(row.get(l_col, 0)) if l_col else 0
+                    d_val = str(row.get(date_col, "")) if date_col else ""
+                    t_val = str(row.get(time_col, "")) if time_col else ""
+                    main_t = str(row.get(text_col, "")) if text_col else ""
+                    rep_t = str(row.get(reply_col, "")) if reply_col else ""
+
+                    with st.expander(f"👁️ {v_val:,} Views | ❤️ {l_val:,} Likes — {d_val} {t_val}"):
+                        st.markdown(f"**Teks Utama:**\n\n> {main_t}")
+                        if rep_t:
+                            st.markdown(f"**CTA Balasan:** `{rep_t}`")
+            else:
+                st.info("Belum ada data views yang terkumpul di Google Sheets.")
+
+        with col_right_an:
+            st.write("##### 🛍️ Winning Products (Produk Paling Diminati)")
+            st.caption("Akumulasi views tertinggi per link affiliate:")
+            link_col = next((c for c in df_posted.columns if any(k in c.lower() for k in ["link", "affiliate"])), None)
+            if v_col and link_col and not df_posted.empty:
+                valid_links = df_posted[df_posted[link_col].astype(str).str.strip() != ""]
+                if not valid_links.empty:
+                    prod_stats = valid_links.groupby(link_col)[v_col].sum().reset_index()
+                    prod_stats = prod_stats.sort_values(by=v_col, ascending=False)
+                    if raw_prods:
+                        df_p_meta = pd.DataFrame(raw_prods)
+                        p_link_meta = next((c for c in df_p_meta.columns if any(k in c.lower() for k in ["link", "affiliate"])), None)
+                        p_name_meta = next((c for c in df_p_meta.columns if any(k in c.lower() for k in ["name", "nama"])), None)
+                        if p_link_meta and p_name_meta:
+                            prod_stats = pd.merge(prod_stats, df_p_meta[[p_name_meta, p_link_meta]], left_on=link_col, right_on=p_link_meta, how="left")
+                            prod_stats = prod_stats[[p_name_meta, v_col, link_col]].rename(columns={p_name_meta: "Nama Produk", v_col: "Total Views", link_col: "Link"})
+                    st.dataframe(prod_stats, use_container_width=True, height=280)
+                else:
+                    st.info("Belum ada link produk di baris postingan.")
+            else:
+                st.info("Data link produk belum cukup untuk dianalisa.")
+
+        st.divider()
+        st.write("##### ⏰ Jam Tayang Paling Efektif (Peak Hours)")
+        st.caption("Rata-rata views berdasarkan jam posting (WIB):")
+        time_col = next((c for c in df_posted.columns if any(k in c.lower() for k in ["time", "jam"])), None)
+        if v_col and time_col and not df_posted.empty:
+            df_posted["hour_num"] = df_posted[time_col].astype(str).apply(lambda x: str(x).split(":")[0].zfill(2) if ":" in str(x) else "00")
+            hourly = df_posted.groupby("hour_num")[v_col].mean().reset_index()
+            hourly["Jam"] = hourly["hour_num"].apply(lambda h: f"{h}:00 WIB")
+            st.bar_chart(hourly.set_index("Jam")[v_col], height=240)
+    else:
+        st.info("Belum ada data postingan di spreadsheet.")
