@@ -15,9 +15,6 @@ load_dotenv()
 
 TZ = pytz.timezone("Asia/Jakarta")
 
-# ==========================================
-# PENGAMBILAN KREDENSIAL & SECRETS
-# ==========================================
 def get_secret(key, default=""):
     val = os.environ.get(key)
     if val:
@@ -38,7 +35,6 @@ def get_secret(key, default=""):
 SPREADSHEET_ID = get_secret("SPREADSHEET_ID", "12HI63liR64ugPz8IHQHy2gAhOOzSDMt0D0-YHO5x08E")
 GCP_CREDS_BASE64 = get_secret("GCP_CREDS_BASE64")
 
-# Deteksi multi-nama API Key agar tidak kosong di GitHub Actions
 AI_API_KEY = (
     get_secret("AI_API_KEY") 
     or os.environ.get("GEMINI_API_KEY") 
@@ -46,9 +42,6 @@ AI_API_KEY = (
     or ""
 )
 
-# ==========================================
-# MATRIKS VIBE & PROMPT THREADS
-# ==========================================
 THREADS_VIBES = [
     "Capek mental / Realistis: gaya orang lelah yang males ribet, praktis, to the point.",
     "Self-deprecating humor: ngetawain kebiasaan diri sendiri yang dulu repot dan konyol.",
@@ -84,7 +77,7 @@ def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
 def call_gemini(prompt: str) -> str:
     key = str(AI_API_KEY).strip().replace("'", "").replace('"', "")
     if not key:
-        raise Exception("API Key Gemini tidak ditemukan! Pastikan AI_API_KEY atau GEMINI_API_KEY terdaftar di Secrets.")
+        raise Exception("API Key Gemini tidak ditemukan di secrets!")
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -95,30 +88,21 @@ def call_gemini(prompt: str) -> str:
         }
     }
 
-    # Panggil v1 dan v1beta secara bergantian dengan model resmi
-    target_urls = [
-        f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={key}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}",
-        f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key={key}"
-    ]
+    models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
+    for m_name in models:
+        for ver in ["v1", "v1beta"]:
+            url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
+            try:
+                res = requests.post(url, json=payload, timeout=25)
+                res_json = res.json()
+                if "candidates" in res_json and res_json["candidates"]:
+                    txt = res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    if txt:
+                        return txt
+            except Exception:
+                continue
 
-    last_err = ""
-    for url in target_urls:
-        try:
-            res = requests.post(url, json=payload, timeout=20)
-            res_json = res.json()
-            if "candidates" in res_json and res_json["candidates"]:
-                txt = res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
-                if txt:
-                    return txt
-            elif "error" in res_json:
-                last_err = res_json["error"].get("message", str(res_json))
-        except Exception as e:
-            last_err = str(e)
-            continue
-
-    raise Exception(f"Gemini API Gagal: {last_err}")
+    raise Exception("Gemini API sibuk / kuota habis sementara.")
 
 def parse_time_str(t_str: str) -> int:
     t_clean = str(t_str).strip().replace(".", ":")
@@ -190,79 +174,6 @@ def get_sheets_client():
     )
     return gspread.authorize(creds)
 
-# ==========================================
-# MODUL ANALITIK (RINGAN)
-# ==========================================
-def update_threads_insights(sh, accounts_map):
-    data_ws = sh.worksheet("data")
-    rows = data_ws.get_all_values()
-    if len(rows) <= 1:
-        return
-
-    now_dt = datetime.now(TZ)
-    updated_count = 0
-    start_scan_idx = max(2, len(rows) - 25)
-
-    for idx in range(start_scan_idx, len(rows) + 1):
-        r = rows[idx - 1]
-        while len(r) < 17:
-            r.append("")
-
-        if r[7].strip().upper() != "POSTED":
-            continue
-
-        raw_candidates = [r[8].strip(), r[9].strip()]
-        main_id = ""
-        detected_acc = r[2].strip()
-
-        for cand in raw_candidates:
-            if not cand:
-                continue
-            if ":" in cand:
-                parts = cand.split(":", 1)
-                detected_acc = parts[0].strip()
-                cand = parts[1].strip()
-
-            m_id = re.search(r'\b\d{15,20}\b', cand)
-            if m_id:
-                main_id = m_id.group(0)
-                break
-
-        if not main_id:
-            continue
-
-        acc_info = accounts_map.get(detected_acc) or accounts_map.get(r[2].strip()) or (list(accounts_map.values())[0] if accounts_map else None)
-        if not acc_info:
-            continue
-
-        tok = acc_info["access_token"]
-        ins_url = f"https://graph.threads.net/v1.0/{main_id}/insights?metric=views,likes,replies,reposts&access_token={tok}"
-
-        try:
-            res = requests.get(ins_url, timeout=5).json()
-            if "data" in res:
-                metrics_data = {item["name"]: item["values"][0]["value"] for item in res["data"] if "values" in item and item["values"]}
-                update_vals = [[
-                    metrics_data.get("views", 0),
-                    metrics_data.get("likes", 0),
-                    metrics_data.get("replies", 0),
-                    metrics_data.get("reposts", 0),
-                    now_dt.strftime("%Y-%m-%d %H:%M:%S")
-                ]]
-                try:
-                    data_ws.update(range_name=f"M{idx}:Q{idx}", values=update_vals)
-                except TypeError:
-                    data_ws.update(f"M{idx}:Q{idx}", update_vals)
-                updated_count += 1
-        except Exception:
-            pass
-
-    if updated_count > 0:
-        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] Sukses update metrik {updated_count} postingan!")
-
-# ==========================================
-# PEMBUATAN DRAF OTOMATIS (MULTI-AKUN AMAN)
-# ==========================================
 def auto_generate_today_drafts_if_needed(sh, accounts_map):
     now_dt = datetime.now(TZ)
     today_str = now_dt.strftime("%Y-%m-%d")
@@ -272,7 +183,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 
     active_accounts = list(accounts_map.keys())
     if not active_accounts:
-        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] Tab Accounts kosong!")
+        print("Tab Accounts kosong!")
         return
 
     cfg_ws = sh.worksheet("Config")
@@ -292,7 +203,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         daily_video = 25
     posts_per_account = min(posts_per_account, 50)
 
-    # Hitung postingan hari ini per akun
+    # Hitung draf hari ini per akun
     account_today_counts = {}
     if len(existing_rows) > 1:
         for r in existing_rows[1:]:
@@ -309,17 +220,17 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     accounts_to_generate = [acc for acc in candidate_accounts if account_today_counts.get(acc, 0) < posts_per_account]
 
     if not accounts_to_generate:
-        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] Semua akun sudah memiliki draf lengkap untuk {today_str}.")
+        print(f"Semua akun sudah punya draf lengkap ({posts_per_account} post) untuk {today_str}.")
         return
 
-    # JIKA SUDAH LEWAT DARI JAM 04:30 (MISAL DI-RUN SIANG), MULAI DARI JAM SEKARANG + 5 MENIT
+    # Mulai dari jam saat ini jika sudah melewati 04:30
     cfg_start_clock = cfg_data.get("start_time", "04:30")
     now_minutes = now_dt.hour * 60 + now_dt.minute
     cfg_start_minutes = parse_time_str(cfg_start_clock)
 
     if now_minutes > cfg_start_minutes:
-        effective_start_m = now_minutes + 5
-        start_clock = f"{effective_start_m // 60:02d}:{effective_start_m % 60:02d}"
+        eff_m = now_minutes + 5
+        start_clock = f"{eff_m // 60:02d}:{eff_m % 60:02d}"
     else:
         start_clock = cfg_start_clock
 
@@ -330,16 +241,15 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     ready_prods = [p for p in all_prods if str(p.get("status", "")).strip().upper() == "READY"]
 
     if not ready_prods:
-        print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] Tab Products tidak memiliki produk berstatus READY.")
+        print("Tab Products tidak memiliki produk READY.")
         return
 
     prods_with_media = [p for p in ready_prods if str(p.get("media_url", "")).strip()]
     prods_text_only = [p for p in ready_prods if not str(p.get("media_url", "")).strip()] or ready_prods
 
-    print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] Menyiapkan draf AI untuk: {', '.join(accounts_to_generate)}...")
+    print(f"Menyusun draf AI untuk akun: {', '.join(accounts_to_generate)}...")
 
     new_rows = []
-
     for acc_idx, acc_name in enumerate(accounts_to_generate):
         start_h, start_m = map(int, start_clock.split(":"))
         offset_m = start_m + (acc_idx * 2)
@@ -353,11 +263,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 
             if p_type == "viral":
                 topik = random.choice(VIRAL_OBSERVATIONS)
-                prompt_v = (
-                    f"Kamu adalah user Threads Indonesia yang santai dan relate.\n"
-                    f"Tulis 1 postingan Threads tentang: '{topik}'. Vibe: {vibe}.\n"
-                    f"Maksimal 220 karakter tanpa tanda kutip."
-                )
+                prompt_v = f"Kamu adalah user Threads Indonesia. Tulis 1 postingan tentang: '{topik}'. Vibe: {vibe}. Maksimal 220 karakter tanpa tanda kutip."
                 p_text = call_gemini(prompt_v)
                 new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(p_text), "", "", "", "PENDING", "", "", "", ""])
 
@@ -367,7 +273,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                     f"Kamu adalah user Threads Indonesia.\n"
                     f"Tulis draf Threads pengantar video untuk produk: {p_cur['product_name']}.\n"
                     f"Highlight: {p_cur.get('highlight', '')}. Vibe: {vibe}.\n"
-                    f"Bukan iklan, buat penonton sadar ini solusi praktis di Shopee. JANGAN taruh link di postingan utama. Maksimal 290 karakter.\n"
+                    f"Bukan bahasa iklan, ceritakan problem sehari-hari. JANGAN taruh link di postingan utama. Maksimal 290 karakter.\n"
                     f"CTA Reply: 1 kalimat singkat pemicu klik Shopee (anti-zonk/keheranan harga murah), maks 110 karakter.\n"
                     f"FORMAT OUTPUT WAJIB:\n[Teks Utama]\n---REPLY_CTA---\n[Teks Balasan CTA]"
                 )
@@ -399,21 +305,19 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                 aff_reply = f"{cta_txt}\n{p_cur['affiliate_link']}"
                 new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(main_txt), "", sanitize_threads_text(aff_reply), p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
-            time.sleep(1)
+            # Jeda 4 detik agar bebas dari limit 15 RPM Gemini
+            time.sleep(4)
 
     new_rows.sort(key=lambda x: x[1])
 
     if new_rows:
         try:
             data_ws.append_rows(new_rows)
-            print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] SUKSES! {len(new_rows)} postingan tersimpan rapi.")
+            print(f"SUKSES! {len(new_rows)} postingan tersimpan rapi.")
         except Exception:
             for r_item in new_rows:
                 data_ws.append_row(r_item)
 
-# ==========================================
-# MODUL PUBLIKASI KE THREADS API
-# ==========================================
 def wait_for_container(container_id: str, access_token: str, max_wait: int = 90) -> bool:
     url = f"https://graph.threads.net/v1.0/{container_id}?fields=status,error_message&access_token={access_token}"
     start = time.time()
@@ -494,7 +398,7 @@ def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: 
         }
         if reply_to_id:
             text_params["reply_to_id"] = reply_to_id
-        res = requests.post(f"https://graph.threads.net/v1.0/{user_id}/threads", data=text_params, timeout=25).json()
+        res = requests.post(f"https://graph.threads.net/v1.0/{user_id}/threads", data=text_params, timeout=20).json()
         container_id = res.get("id")
         time.sleep(2)
 
@@ -508,9 +412,6 @@ def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: 
 
     raise Exception("Gagal publish ke Threads")
 
-# ==========================================
-# RUNNER UTAMA
-# ==========================================
 def run_worker():
     print(f"[{datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')} WIB] Memeriksa jadwal antrean...")
     client = get_sheets_client()
@@ -525,11 +426,6 @@ def run_worker():
         token = str(a.get("access_token", "")).strip()
         if name and uid and token:
             accounts_map[name] = {"user_id": uid, "access_token": token}
-
-    try:
-        update_threads_insights(sh, accounts_map)
-    except Exception as e:
-        print(f"[INSIGHTS WARN] {e}")
 
     try:
         auto_generate_today_drafts_if_needed(sh, accounts_map)
@@ -556,6 +452,7 @@ def run_worker():
         status = r[7].strip().upper()
         target_hijack_id = r[11].strip()
 
+        # Eksekusi hanya baris PENDING
         if status != "PENDING" or not main_text:
             continue
 
@@ -579,7 +476,7 @@ def run_worker():
         tok = acc_info["access_token"]
 
         data_ws.update_cell(idx, 8, "POSTING")
-        print(f"[ROW {idx}] Sedang memproses @{target_acc}...")
+        print(f"[ROW {idx}] Memproses postingan @{target_acc}...")
 
         try:
             main_id = publish_threads_post(u_id, tok, text=main_text, media_raw=media_url, reply_to_id=target_hijack_id)
@@ -596,7 +493,7 @@ def run_worker():
             data_ws.update_cell(idx, 9, main_id)
             data_ws.update_cell(idx, 10, "")
             data_ws.update_cell(idx, 11, datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"))
-            print(f"[ROW {idx}] Berhasil terbit: {main_id}")
+            print(f"[ROW {idx}] Sukses terbit: {main_id}")
 
         except Exception as ex:
             err_msg = str(ex)[:200]
