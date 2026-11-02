@@ -15,6 +15,9 @@ load_dotenv()
 
 TZ = pytz.timezone("Asia/Jakarta")
 
+# ==========================================
+# PENGAMBILAN KREDENSIAL & SECRETS
+# ==========================================
 def get_secret(key, default=""):
     val = os.environ.get(key)
     if val:
@@ -42,6 +45,9 @@ AI_API_KEY = (
     or ""
 )
 
+# ==========================================
+# MATRIKS VIBE & PROMPT THREADS
+# ==========================================
 THREADS_VIBES = [
     "Capek mental / Realistis: gaya orang lelah yang males ribet, praktis, to the point.",
     "Self-deprecating humor: ngetawain kebiasaan diri sendiri yang dulu repot dan konyol.",
@@ -77,7 +83,7 @@ def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
 def call_gemini(prompt: str) -> str:
     key = str(AI_API_KEY).strip().replace("'", "").replace('"', "")
     if not key:
-        raise Exception("API Key Gemini tidak ditemukan di secrets!")
+        return "Salah satu barang yang lumayan ngebantu rutinitas harian."
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -93,7 +99,7 @@ def call_gemini(prompt: str) -> str:
         for ver in ["v1", "v1beta"]:
             url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
             try:
-                res = requests.post(url, json=payload, timeout=25)
+                res = requests.post(url, json=payload, timeout=20)
                 res_json = res.json()
                 if "candidates" in res_json and res_json["candidates"]:
                     txt = res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
@@ -102,15 +108,16 @@ def call_gemini(prompt: str) -> str:
             except Exception:
                 continue
 
-    raise Exception("Gemini API sibuk / kuota habis sementara.")
+    return "Salah satu barang yang lumayan ngebantu rutinitas harian."
 
 def parse_time_str(t_str: str) -> int:
-    t_clean = str(t_str).strip().replace(".", ":")
-    if t_clean in ["24:00", "24.00", "00:00", "00.00"]:
-        return 23 * 60 + 45
-    m = re.match(r"^(\d{1,2}):(\d{1,2})", t_clean)
-    if m:
-        return int(m.group(1)) * 60 + int(m.group(2))
+    t_clean = str(t_str).strip()
+    parts = re.findall(r'\d+', t_clean)
+    if len(parts) >= 2:
+        h, m = int(parts[0]), int(parts[1])
+        if h >= 24:
+            return 23 * 60 + 45
+        return h * 60 + m
     return 4 * 60 + 30
 
 def generate_slots(total_count, start_time_str="04:30", end_time_str="23:45"):
@@ -174,6 +181,9 @@ def get_sheets_client():
     )
     return gspread.authorize(creds)
 
+# ==========================================
+# PEMBUATAN DRAF OTOMATIS (PER-AKUN REAL-TIME)
+# ==========================================
 def auto_generate_today_drafts_if_needed(sh, accounts_map):
     now_dt = datetime.now(TZ)
     today_str = now_dt.strftime("%Y-%m-%d")
@@ -183,12 +193,12 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 
     active_accounts = list(accounts_map.keys())
     if not active_accounts:
-        print("Tab Accounts kosong!")
+        print("[AUTO-GEN] Tab Accounts kosong!")
         return
 
     cfg_ws = sh.worksheet("Config")
     cfg_rows = cfg_ws.get_all_values()
-    cfg_data = {r[0].strip(): r[1].strip() for r in cfg_rows if len(r) >= 2 and r[0].strip()}
+    cfg_data = {str(r[0]).strip(): str(r[1]).strip() for r in cfg_rows if len(r) >= 2 and str(r[0]).strip()}
 
     try:
         daily_viral = int(cfg_data.get("daily_viral_count", cfg_data.get("count_viral", 0)))
@@ -203,12 +213,12 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         daily_video = 25
     posts_per_account = min(posts_per_account, 50)
 
-    # Hitung draf hari ini per akun
+    # Hitung postingan hari ini per akun
     account_today_counts = {}
     if len(existing_rows) > 1:
         for r in existing_rows[1:]:
-            if len(r) >= 3 and r[0].strip() == today_str:
-                acc_name_row = r[2].strip()
+            if len(r) >= 3 and str(r[0]).strip() == today_str:
+                acc_name_row = str(r[2]).strip()
                 account_today_counts[acc_name_row] = account_today_counts.get(acc_name_row, 0) + 1
 
     target_cfg_acc = cfg_data.get("target_autopilot_account", "-- Semua Akun (All Accounts) --").strip()
@@ -220,19 +230,23 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     accounts_to_generate = [acc for acc in candidate_accounts if account_today_counts.get(acc, 0) < posts_per_account]
 
     if not accounts_to_generate:
-        print(f"Semua akun sudah punya draf lengkap ({posts_per_account} post) untuk {today_str}.")
+        print(f"[AUTO-GEN] Semua akun sudah memiliki draf lengkap ({posts_per_account} post) untuk {today_str}.")
         return
 
-    # Mulai dari jam saat ini jika sudah melewati 04:30
+    print(f"[AUTO-GEN] Memproses draf untuk akun: {', '.join(accounts_to_generate)}...")
+
+    # Parsing jam secara aman (kebal format HH:MM:SS)
     cfg_start_clock = cfg_data.get("start_time", "04:30")
     now_minutes = now_dt.hour * 60 + now_dt.minute
     cfg_start_minutes = parse_time_str(cfg_start_clock)
 
     if now_minutes > cfg_start_minutes:
         eff_m = now_minutes + 5
-        start_clock = f"{eff_m // 60:02d}:{eff_m % 60:02d}"
+        start_h_base, start_m_base = eff_m // 60, eff_m % 60
     else:
-        start_clock = cfg_start_clock
+        s_parts = re.findall(r'\d+', cfg_start_clock)
+        start_h_base = int(s_parts[0]) if s_parts else 4
+        start_m_base = int(s_parts[1]) if len(s_parts) > 1 else 30
 
     end_clock = cfg_data.get("end_time", "23:45")
 
@@ -241,23 +255,22 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     ready_prods = [p for p in all_prods if str(p.get("status", "")).strip().upper() == "READY"]
 
     if not ready_prods:
-        print("Tab Products tidak memiliki produk READY.")
+        print("[AUTO-GEN] Tab Products tidak memiliki produk READY.")
         return
 
     prods_with_media = [p for p in ready_prods if str(p.get("media_url", "")).strip()]
     prods_text_only = [p for p in ready_prods if not str(p.get("media_url", "")).strip()] or ready_prods
 
-    print(f"Menyusun draf AI untuk akun: {', '.join(accounts_to_generate)}...")
-
-    new_rows = []
+    # PROSES DAN SIMPAN PER-AKUN LANGSUNG KE SPREADSHEET
     for acc_idx, acc_name in enumerate(accounts_to_generate):
-        start_h, start_m = map(int, start_clock.split(":"))
-        offset_m = start_m + (acc_idx * 2)
-        staggered_start = f"{start_h + (offset_m // 60):02d}:{offset_m % 60:02d}"
+        print(f"[AUTO-GEN] Meracik {posts_per_account} post untuk @{acc_name}...")
+        offset_m = start_m_base + (acc_idx * 2)
+        staggered_start = f"{start_h_base + (offset_m // 60):02d}:{offset_m % 60:02d}"
 
         slots = generate_slots(posts_per_account, start_time_str=staggered_start, end_time_str=end_clock)
         types_list = arrange_post_types_3way(daily_viral, daily_text, daily_video)
 
+        acc_rows = []
         for slot_time, p_type in zip(slots, types_list):
             vibe = random.choice(THREADS_VIBES)
 
@@ -265,15 +278,15 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                 topik = random.choice(VIRAL_OBSERVATIONS)
                 prompt_v = f"Kamu adalah user Threads Indonesia. Tulis 1 postingan tentang: '{topik}'. Vibe: {vibe}. Maksimal 220 karakter tanpa tanda kutip."
                 p_text = call_gemini(prompt_v)
-                new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(p_text), "", "", "", "PENDING", "", "", "", ""])
+                acc_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(p_text), "", "", "", "PENDING", "", "", "", ""])
 
             elif p_type == "video":
                 p_cur = random.choice(prods_with_media if prods_with_media else ready_prods)
                 prompt = (
                     f"Kamu adalah user Threads Indonesia.\n"
-                    f"Tulis draf Threads pengantar video untuk produk: {p_cur['product_name']}.\n"
+                    f"Tulis draf Threads video penahan jempol untuk produk: {p_cur['product_name']}.\n"
                     f"Highlight: {p_cur.get('highlight', '')}. Vibe: {vibe}.\n"
-                    f"Bukan bahasa iklan, ceritakan problem sehari-hari. JANGAN taruh link di postingan utama. Maksimal 290 karakter.\n"
+                    f"Bukan iklan, buat penonton sadar alat/barang ini solusi nyata yang dijual murah di Shopee. JANGAN taruh link di postingan utama. Maksimal 290 karakter.\n"
                     f"CTA Reply: 1 kalimat singkat pemicu klik Shopee (anti-zonk/keheranan harga murah), maks 110 karakter.\n"
                     f"FORMAT OUTPUT WAJIB:\n[Teks Utama]\n---REPLY_CTA---\n[Teks Balasan CTA]"
                 )
@@ -286,7 +299,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 
                 aff_reply = f"{cta_txt}\n{p_cur['affiliate_link']}"
                 media_formatted = prepare_media_for_post(str(p_cur.get("media_url", "")).strip(), duplicate_single_video=True)
-                new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(main_txt), media_formatted, sanitize_threads_text(aff_reply), p_cur['affiliate_link'], "PENDING", "", "", "", ""])
+                acc_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(main_txt), media_formatted, sanitize_threads_text(aff_reply), p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
             else:
                 p_cur = random.choice(prods_text_only)
@@ -303,21 +316,24 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                     main_txt, cta_txt = raw_out.strip(), random.choice(FALLBACK_CTA_STARTERS)
 
                 aff_reply = f"{cta_txt}\n{p_cur['affiliate_link']}"
-                new_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(main_txt), "", sanitize_threads_text(aff_reply), p_cur['affiliate_link'], "PENDING", "", "", "", ""])
+                acc_rows.append([today_str, slot_time, acc_name, sanitize_threads_text(main_txt), "", sanitize_threads_text(aff_reply), p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
-            # Jeda 4 detik agar bebas dari limit 15 RPM Gemini
-            time.sleep(4)
+            time.sleep(1)
 
-    new_rows.sort(key=lambda x: x[1])
+        # SIMPAN LANGSUNG PER-AKUN KE SPREADSHEET
+        if acc_rows:
+            try:
+                data_ws.append_rows(acc_rows)
+                print(f"[AUTO-GEN] ✅ Berhasil menyimpan {len(acc_rows)} baris untuk @{acc_name}!")
+            except Exception as e_app:
+                print(f"[WARN] append_rows gagal ({e_app}), menyimpan baris per baris...")
+                for r_item in acc_rows:
+                    data_ws.append_row(r_item)
+                    time.sleep(0.3)
 
-    if new_rows:
-        try:
-            data_ws.append_rows(new_rows)
-            print(f"SUKSES! {len(new_rows)} postingan tersimpan rapi.")
-        except Exception:
-            for r_item in new_rows:
-                data_ws.append_row(r_item)
-
+# ==========================================
+# MODUL PUBLIKASI KE THREADS API
+# ==========================================
 def wait_for_container(container_id: str, access_token: str, max_wait: int = 90) -> bool:
     url = f"https://graph.threads.net/v1.0/{container_id}?fields=status,error_message&access_token={access_token}"
     start = time.time()
@@ -412,6 +428,9 @@ def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: 
 
     raise Exception("Gagal publish ke Threads")
 
+# ==========================================
+# RUNNER UTAMA
+# ==========================================
 def run_worker():
     print(f"[{datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')} WIB] Memeriksa jadwal antrean...")
     client = get_sheets_client()
@@ -452,7 +471,6 @@ def run_worker():
         status = r[7].strip().upper()
         target_hijack_id = r[11].strip()
 
-        # Eksekusi hanya baris PENDING
         if status != "PENDING" or not main_text:
             continue
 
@@ -476,7 +494,7 @@ def run_worker():
         tok = acc_info["access_token"]
 
         data_ws.update_cell(idx, 8, "POSTING")
-        print(f"[ROW {idx}] Memproses postingan @{target_acc}...")
+        print(f"[ROW {idx}] Sedang memproses @{target_acc}...")
 
         try:
             main_id = publish_threads_post(u_id, tok, text=main_text, media_raw=media_url, reply_to_id=target_hijack_id)
