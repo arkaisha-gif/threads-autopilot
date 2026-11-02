@@ -37,13 +37,7 @@ def get_secret(key, default=""):
 
 SPREADSHEET_ID = get_secret("SPREADSHEET_ID", "12HI63liR64ugPz8IHQHy2gAhOOzSDMt0D0-YHO5x08E")
 GCP_CREDS_BASE64 = get_secret("GCP_CREDS_BASE64")
-
-AI_API_KEY = (
-    get_secret("AI_API_KEY") 
-    or os.environ.get("GEMINI_API_KEY") 
-    or os.environ.get("GOOGLE_API_KEY") 
-    or ""
-)
+AI_API_KEY = get_secret("AI_API_KEY")
 
 # ==========================================
 # MATRIKS VIBE & PROMPT THREADS
@@ -80,35 +74,77 @@ def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
         return text_str[:max_chars - 3].rstrip() + "..."
     return text_str
 
+# Cache model agar list_models hanya dipanggil 1 kali di awal
+CACHED_GEMINI_PAIRS = None
+
+def get_gemini_pairs(key: str):
+    global CACHED_GEMINI_PAIRS
+    if CACHED_GEMINI_PAIRS is not None:
+        return CACHED_GEMINI_PAIRS
+
+    available = []
+    for ver in ["v1", "v1beta"]:
+        list_url = f"https://generativelanguage.googleapis.com/{ver}/models?key={key}"
+        try:
+            r = requests.get(list_url, timeout=10).json()
+            if "models" in r:
+                for m in r["models"]:
+                    if "generateContent" in m.get("supportedGenerationMethods", []):
+                        available.append((ver, m["name"].replace("models/", "")))
+        except Exception:
+            pass
+
+    preferred = ["1.5-flash", "2.0-flash", "flash", "1.5-pro", "gemini-pro"]
+    def get_rank(pair):
+        v, n = pair
+        for idx, pref in enumerate(preferred):
+            if pref in n.lower():
+                return idx
+        return 99
+
+    available.sort(key=get_rank)
+    if available:
+        CACHED_GEMINI_PAIRS = available
+        return available
+
+    fallback = [
+        ("v1", "gemini-1.5-flash"),
+        ("v1", "gemini-1.5-pro"),
+        ("v1beta", "gemini-1.5-flash"),
+        ("v1beta", "gemini-2.0-flash"),
+    ]
+    CACHED_GEMINI_PAIRS = fallback
+    return fallback
+
 def call_gemini(prompt: str) -> str:
-    key = str(AI_API_KEY).strip().replace("'", "").replace('"', "")
+    key = str(AI_API_KEY).strip().replace("'", "").replace('"', "") if AI_API_KEY else ""
     if not key:
-        return "Salah satu barang yang lumayan ngebantu rutinitas harian."
+        raise Exception("API Key Gemini (AI_API_KEY) tidak ditemukan!")
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.9,
+            "temperature": 0.95,
             "topP": 0.95,
             "topK": 40
         }
     }
 
-    models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
-    for m_name in models:
-        for ver in ["v1", "v1beta"]:
-            url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
-            try:
-                res = requests.post(url, json=payload, timeout=20)
-                res_json = res.json()
-                if "candidates" in res_json and res_json["candidates"]:
-                    txt = res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    if txt:
-                        return txt
-            except Exception:
-                continue
+    pairs = get_gemini_pairs(key)
+    for ver, m_name in pairs:
+        url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
+        try:
+            res = requests.post(url, json=payload, timeout=25).json()
+            if "candidates" in res and res["candidates"]:
+                text_out = res["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if text_out:
+                    return text_out
+            elif "error" in res:
+                print(f"[GEMINI REJECTED] {m_name}: {res['error'].get('message')}")
+        except Exception as e:
+            print(f"[GEMINI RETRY] {e}")
 
-    return "Salah satu barang yang lumayan ngebantu rutinitas harian."
+    raise Exception("Panggilan Gemini gagal pada seluruh model yang tersedia!")
 
 def parse_time_str(t_str: str) -> int:
     t_clean = str(t_str).strip()
@@ -213,7 +249,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         daily_video = 25
     posts_per_account = min(posts_per_account, 50)
 
-    # Hitung postingan hari ini per akun
+    # Hitung draf hari ini per akun
     account_today_counts = {}
     if len(existing_rows) > 1:
         for r in existing_rows[1:]:
@@ -235,7 +271,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 
     print(f"[AUTO-GEN] Memproses draf untuk akun: {', '.join(accounts_to_generate)}...")
 
-    # Parsing jam secara aman (kebal format HH:MM:SS)
     cfg_start_clock = cfg_data.get("start_time", "04:30")
     now_minutes = now_dt.hour * 60 + now_dt.minute
     cfg_start_minutes = parse_time_str(cfg_start_clock)
@@ -261,7 +296,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     prods_with_media = [p for p in ready_prods if str(p.get("media_url", "")).strip()]
     prods_text_only = [p for p in ready_prods if not str(p.get("media_url", "")).strip()] or ready_prods
 
-    # PROSES DAN SIMPAN PER-AKUN LANGSUNG KE SPREADSHEET
     for acc_idx, acc_name in enumerate(accounts_to_generate):
         print(f"[AUTO-GEN] Meracik {posts_per_account} post untuk @{acc_name}...")
         offset_m = start_m_base + (acc_idx * 2)
@@ -320,11 +354,10 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 
             time.sleep(1)
 
-        # SIMPAN LANGSUNG PER-AKUN KE SPREADSHEET
         if acc_rows:
             try:
                 data_ws.append_rows(acc_rows)
-                print(f"[AUTO-GEN] ✅ Berhasil menyimpan {len(acc_rows)} baris untuk @{acc_name}!")
+                print(f"[AUTO-GEN] Berhasil menyimpan {len(acc_rows)} baris untuk @{acc_name}!")
             except Exception as e_app:
                 print(f"[WARN] append_rows gagal ({e_app}), menyimpan baris per baris...")
                 for r_item in acc_rows:
