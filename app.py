@@ -639,6 +639,101 @@ with tabs[0]:
             except Exception as e:
                 st.error(f"Gagal menyimpan: {e}")
 
+    # ==========================================================================
+    # MODUL TAMBAHAN: PENGATURAN KOMPOSISI MODEL 1 & 2 PER AKUN (BY PERCENTAGE / AI)
+    # ==========================================================================
+    st.divider()
+    st.write("#### ⚖️ Pengaturan Komposisi Model Postingan per Akun (Model 1 vs Model 2)")
+    st.caption("Tentukan format postingan per akun: Model 1 (Direct Link di Post Utama / 1 Post) vs Model 2 (Link di Kolom Balasan) via persentase manual atau diserahkan ke AI.")
+
+    acc_options_model = acc_names_all if acc_names_all else ["-- Belum ada akun --"]
+    sel_acc_model = st.selectbox(
+        "Pilih Akun Threads yang Ingin Diatur:",
+        acc_options_model,
+        key="sel_acc_model_setting"
+    )
+
+    if sel_acc_model and sel_acc_model != "-- Belum ada akun --":
+        key_mode_acc = f"model_decision_mode_{sel_acc_model}"
+        key_m1_acc = f"model_1_ratio_{sel_acc_model}"
+        
+        cur_acc_mode = cfg_data.get(key_mode_acc, cfg_data.get("model_decision_mode", "MANUAL")).upper()
+        try:
+            cur_acc_m1 = int(cfg_data.get(key_m1_acc, cfg_data.get("model_1_ratio", 30)))
+        except Exception:
+            cur_acc_m1 = 30
+
+        choice_model_mode = st.radio(
+            f"Metode Penentuan Model untuk {sel_acc_model}:",
+            options=["MANUAL", "AI_DYNAMIC"],
+            index=0 if cur_acc_mode == "MANUAL" else 1,
+            format_func=lambda x: "🎯 Tentukan Manual (By Percentage Slider)" if x == "MANUAL" else "🤖 Diserahkan ke AI (Otomatis Multi-Armed Bandit)",
+            key=f"radio_mode_{sel_acc_model}"
+        )
+
+        if choice_model_mode == "MANUAL":
+            m1_slider_val = st.slider(
+                f"Persentase Model 1 (Direct Link) untuk {sel_acc_model}:",
+                min_value=0,
+                max_value=100,
+                value=cur_acc_m1,
+                step=5,
+                key=f"slider_m1_{sel_acc_model}",
+                help="Sisa persentase otomatis menjadi jatah Model 2 (Link di Kolom Balasan)."
+            )
+            m2_slider_val = 100 - m1_slider_val
+            
+            c_m1_box, c_m2_box = st.columns(2)
+            with c_m1_box:
+                st.metric("Model 1 (Link di Post Utama)", f"{m1_slider_val}%")
+            with c_m2_box:
+                st.metric("Model 2 (Link di Kolom Balasan)", f"{m2_slider_val}%")
+            st.progress(m1_slider_val / 100)
+            st.caption(f"🔵 **Model 1:** {m1_slider_val}% | ⚪ **Model 2:** {m2_slider_val}%")
+            final_m1_to_save = m1_slider_val
+            final_m2_to_save = m2_slider_val
+        else:
+            final_m1_to_save = cur_acc_m1
+            final_m2_to_save = 100 - cur_acc_m1
+            st.info(
+                f"💡 **Diserahkan ke AI:** Komposisi Model 1 dan Model 2 untuk akun `{sel_acc_model}` "
+                f"akan diputuskan secara dinamis dan adaptif oleh AI (Multi-Armed Bandit / Thompson Sampling) "
+                f"di `worker.py` berdasarkan data views dan performa historis."
+            )
+
+        if st.button(f"💾 Simpan Komposisi Model ({sel_acc_model})", type="primary", key=f"btn_save_model_{sel_acc_model}"):
+            sh_obj = get_spreadsheet()
+            if sh_obj:
+                try:
+                    update_config_keys(sh_obj, {
+                        f"model_decision_mode_{sel_acc_model}": choice_model_mode,
+                        f"model_1_ratio_{sel_acc_model}": str(final_m1_to_save),
+                        f"model_2_ratio_{sel_acc_model}": str(final_m2_to_save)
+                    })
+                    st.cache_data.clear()
+                    st.success(f"✅ Pengaturan komposisi model untuk {sel_acc_model} berhasil disimpan ke Google Sheets!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Gagal menyimpan ke Sheets: {e}")
+
+    if acc_names_all:
+        with st.expander("📋 Lihat Rekap Status Komposisi Model Semua Akun"):
+            rekap_rows = []
+            for a_name in acc_names_all:
+                a_mode = cfg_data.get(f"model_decision_mode_{a_name}", cfg_data.get("model_decision_mode", "MANUAL")).upper()
+                a_m1 = cfg_data.get(f"model_1_ratio_{a_name}", cfg_data.get("model_1_ratio", "30"))
+                try:
+                    a_m2 = str(100 - int(a_m1))
+                except:
+                    a_m2 = "70"
+                rekap_rows.append({
+                    "Akun": a_name,
+                    "Mode": "🤖 Diserahkan ke AI" if a_mode == "AI_DYNAMIC" else "🎯 Manual",
+                    "Model 1 (Direct)": f"{a_m1}%",
+                    "Model 2 (Reply)": f"{a_m2}%"
+                })
+            st.dataframe(pd.DataFrame(rekap_rows), use_container_width=True, hide_index=True)
+
     st.divider()
 
     st.write("#### ⚡ Eksekusi Cepat: Generate Konten Hari Ini")
