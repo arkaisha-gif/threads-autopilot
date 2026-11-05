@@ -454,7 +454,7 @@ except Exception as e:
         st.error(f"Gagal memuat data Google Sheets: {e}")
     st.stop()
 
-# Tab Menu (Analisa Data diletakkan di tab terakhir)
+# Tab Menu
 tabs = st.tabs([
     "⚡ Kontrol Autopilot",
     "🎯 Hijack Thread Viral",
@@ -640,7 +640,7 @@ with tabs[0]:
                 st.error(f"Gagal menyimpan: {e}")
 
     # ==========================================================================
-    # MODUL TAMBAHAN: PENGATURAN KOMPOSISI MODEL 1 & 2 PER AKUN (BY PERCENTAGE / AI)
+    # MODUL: PENGATURAN KOMPOSISI MODEL 1 & 2 PER AKUN (BY PERCENTAGE / AI)
     # ==========================================================================
     st.divider()
     st.write("#### ⚖️ Pengaturan Komposisi Model Postingan per Akun (Model 1 vs Model 2)")
@@ -1309,107 +1309,292 @@ with tabs[5]:
                     st.rerun()
 
 # ==============================================================================
-# TAB 7: ANALISA DATA & AI SELF-LEARNING (TAB TERAKHIR)
+# TAB 7: ANALISA DATA & AI SELF-LEARNING (FORMAT SESUAI MOCKUP DASHBOARD)
 # ==============================================================================
 with tabs[6]:
     st.subheader("📊 Analisa Engagement & AI Self-Learning")
     st.caption("Pantau performa postingan riil dari Threads API. Data ini digunakan oleh AI untuk mengoptimalkan hook, balasan CTA, dan produk unggulan.")
 
-    if all_data:
-        df_an = pd.DataFrame(all_data)
+    if not all_data:
+        st.info("Belum ada data postingan di spreadsheet.")
+    else:
+        df_raw = pd.DataFrame(all_data)
 
-        # Cari kolom status secara dinamis
-        stat_col = next((c for c in df_an.columns if c.strip().lower() == "status"), None)
-        if stat_col:
-            df_posted = df_an[df_an[stat_col].astype(str).str.upper() == "POSTED"].copy()
-        else:
-            df_posted = df_an.copy()
+        # 1. Identifikasi Kolom Kunci secara Dinamis
+        date_col = next((c for c in df_raw.columns if any(k in c.lower() for k in ["date", "tanggal"])), None)
+        time_col = next((c for c in df_raw.columns if any(k in c.lower() for k in ["time", "jam"])), None)
+        acc_col = next((c for c in df_raw.columns if any(k in c.lower() for k in ["account", "akun"])), None)
+        text_col = next((c for c in df_raw.columns if any(k in c.lower() for k in ["text", "main", "post", "isi"])), None)
+        reply_col = next((c for c in df_raw.columns if "reply" in c.lower()), None)
+        link_col = next((c for c in df_raw.columns if any(k in c.lower() for k in ["link", "affiliate", "shopee"])), None)
+        stat_col = next((c for c in df_raw.columns if c.strip().lower() == "status"), None)
 
-        # Konversi kolom numerik
+        # Standarisasi nilai numerik
         for m in ["views", "likes", "replies", "reposts"]:
-            matched_col = next((c for c in df_an.columns if c.strip().lower() == m), None)
-            if matched_col:
-                df_posted[matched_col] = pd.to_numeric(
-                    df_posted[matched_col].astype(str).str.replace(",", "").replace("", "0"), 
+            m_col = next((c for c in df_raw.columns if c.strip().lower() == m), None)
+            if m_col:
+                df_raw[m_col] = pd.to_numeric(
+                    df_raw[m_col].astype(str).str.replace(",", "").replace("", "0"),
                     errors="coerce"
                 ).fillna(0).astype(int)
+            else:
+                df_raw[m] = 0
 
-        v_col = next((c for c in df_posted.columns if c.strip().lower() == "views"), None)
-        l_col = next((c for c in df_posted.columns if c.strip().lower() == "likes"), None)
-        r_col = next((c for c in df_posted.columns if c.strip().lower() == "replies"), None)
-        rp_col = next((c for c in df_posted.columns if c.strip().lower() == "reposts"), None)
+        v_col = next((c for c in df_raw.columns if c.strip().lower() == "views"), "views")
+        l_col = next((c for c in df_raw.columns if c.strip().lower() == "likes"), "likes")
+        r_col = next((c for c in df_raw.columns if c.strip().lower() == "replies"), "replies")
+        rp_col = next((c for c in df_raw.columns if c.strip().lower() == "reposts"), "reposts")
 
-        tot_views = int(df_posted[v_col].sum()) if v_col else 0
-        tot_likes = int(df_posted[l_col].sum()) if l_col else 0
-        tot_rep = int(df_posted[r_col].sum()) if r_col else 0
-        tot_rp = int(df_posted[rp_col].sum()) if rp_col else 0
-        tot_success = len(df_posted)
+        # Parsing tanggal untuk filter waktu
+        if date_col:
+            df_raw["_parsed_date"] = pd.to_datetime(df_raw[date_col].astype(str).str.strip(), errors="coerce").dt.date
+        else:
+            df_raw["_parsed_date"] = date.today()
 
-        c_an1, c_an2, c_an3, c_an4, c_an5 = st.columns(5)
-        c_an1.metric("Total Views", f"{tot_views:,}")
-        c_an2.metric("Total Likes", f"{tot_likes:,}")
-        c_an3.metric("Total Replies", f"{tot_rep:,}")
-        c_an4.metric("Total Reposts", f"{tot_rp:,}")
-        c_an5.metric("Post Sukses", f"{tot_success:,}")
+        # Filter hanya status POSTED secara default
+        if stat_col:
+            df_base = df_raw[df_raw[stat_col].astype(str).str.upper() == "POSTED"].copy()
+        else:
+            df_base = df_raw.copy()
 
-        st.divider()
+        # ======================================================================
+        # FILTER BAR TERPADU (Sesuai Mockup Atas: Date Range | Account | Model)
+        # ======================================================================
+        st.markdown("#### 🎛️ Filter Analitik")
+        f_col1, f_col2, f_col3, f_col4 = st.columns([2, 2, 2, 1])
 
-        col_left_an, col_right_an = st.columns(2)
-        with col_left_an:
-            st.write("##### 🏆 5 Postingan dengan Views Tertinggi (Winning Copies)")
-            st.caption("Pola tulisan & hook dari postingan ini dipelajari oleh Gemini AI untuk postingan baru:")
-            if v_col and not df_posted.empty and tot_views > 0:
-                top5 = df_posted.sort_values(by=v_col, ascending=False).head(5)
-                text_col = next((c for c in top5.columns if any(k in c.lower() for k in ["text", "main", "post"])), None)
-                reply_col = next((c for c in top5.columns if "reply" in c.lower()), None)
-                date_col = next((c for c in top5.columns if any(k in c.lower() for k in ["date", "tanggal"])), None)
-                time_col = next((c for c in top5.columns if any(k in c.lower() for k in ["time", "jam"])), None)
+        with f_col1:
+            time_filter = st.selectbox(
+                "📅 Rentang Waktu:",
+                ["Last 30 Days", "Last 7 Days", "Today", "Semua Waktu", "Custom Range"],
+                index=0
+            )
 
-                for _, row in top5.iterrows():
+        with f_col2:
+            acc_filter_opts = ["@all_accounts (Semua)"] + acc_names_all
+            selected_acc_filter = st.selectbox("👤 Akun Threads:", acc_filter_opts, index=0)
+
+        with f_col3:
+            model_filter = st.selectbox(
+                "🎯 Format / Model:",
+                ["Semua Format", "Model 1 (Direct Link)", "Model 2 (Reply Link)"],
+                index=0
+            )
+
+        with f_col4:
+            st.write("")
+            st.write("")
+            btn_refresh = st.button("🔄 Refresh", use_container_width=True)
+            if btn_refresh:
+                st.cache_data.clear()
+                st.rerun()
+
+        # Tanggal Kustom (Muncul jika Custom Range dipilih)
+        today_date = date.today()
+        start_filter_date = today_date - timedelta(days=30)
+        end_filter_date = today_date
+
+        if time_filter == "Today":
+            start_filter_date = today_date
+            end_filter_date = today_date
+        elif time_filter == "Last 7 Days":
+            start_filter_date = today_date - timedelta(days=7)
+            end_filter_date = today_date
+        elif time_filter == "Last 30 Days":
+            start_filter_date = today_date - timedelta(days=30)
+            end_filter_date = today_date
+        elif time_filter == "Semua Waktu":
+            start_filter_date = date(2020, 1, 1)
+            end_filter_date = date(2035, 12, 31)
+        elif time_filter == "Custom Range":
+            custom_dates = st.date_input("Pilih Tanggal Mulai & Akhir:", value=(start_filter_date, end_filter_date))
+            if isinstance(custom_dates, tuple) and len(custom_dates) == 2:
+                start_filter_date, end_filter_date = custom_dates
+
+        # Eksekusi Filter
+        df_filtered = df_base.copy()
+
+        # 1. Filter Tanggal
+        df_filtered = df_filtered[
+            (df_filtered["_parsed_date"] >= start_filter_date) & 
+            (df_filtered["_parsed_date"] <= end_filter_date)
+        ]
+
+        # 2. Filter Akun
+        if selected_acc_filter != "@all_accounts (Semua)" and acc_col:
+            df_filtered = df_filtered[df_filtered[acc_col].astype(str).str.strip() == selected_acc_filter]
+
+        # 3. Filter Model
+        if model_filter != "Semua Format":
+            if model_filter == "Model 1 (Direct Link)":
+                df_filtered = df_filtered[df_filtered[reply_col].astype(str).str.strip().isin(["", "nan", "None"])]
+            else:
+                df_filtered = df_filtered[~df_filtered[reply_col].astype(str).str.strip().isin(["", "nan", "None"])]
+
+        # Hitung Data Periode Sebelumnya untuk Indikator Delta (%)
+        period_days = max(1, (end_filter_date - start_filter_date).days + 1)
+        prev_start = start_filter_date - timedelta(days=period_days)
+        prev_end = start_filter_date - timedelta(days=1)
+        df_prev = df_base[
+            (df_base["_parsed_date"] >= prev_start) & 
+            (df_base["_parsed_date"] <= prev_end)
+        ]
+        if selected_acc_filter != "@all_accounts (Semua)" and acc_col:
+            df_prev = df_prev[df_prev[acc_col].astype(str).str.strip() == selected_acc_filter]
+
+        def calc_delta_str(curr_val, prev_val):
+            if prev_val == 0:
+                return "+0.0%" if curr_val == 0 else "+100%"
+            pct = ((curr_val - prev_val) / prev_val) * 100
+            sign = "+" if pct >= 0 else ""
+            return f"{sign}{pct:.1f}%"
+
+        # Metrik Sekarang
+        tot_views = int(df_filtered[v_col].sum())
+        tot_likes = int(df_filtered[l_col].sum())
+        tot_rep = int(df_filtered[r_col].sum())
+        tot_rp = int(df_filtered[rp_col].sum())
+        tot_success = len(df_filtered)
+
+        # Delta vs Periode Sebelumnya
+        delta_v = calc_delta_str(tot_views, int(df_prev[v_col].sum()))
+        delta_l = calc_delta_str(tot_likes, int(df_prev[l_col].sum()))
+        delta_r = calc_delta_str(tot_rep, int(df_prev[r_col].sum()))
+        delta_rp = calc_delta_str(tot_rp, int(df_prev[rp_col].sum()))
+        delta_s = calc_delta_str(tot_success, len(df_prev))
+
+        st.markdown("---")
+
+        # ======================================================================
+        # KPI CARDS DENGAN DELTA (Sesuai Baris Kartu Mockup)
+        # ======================================================================
+        c_kpi1, c_kpi2, c_kpi3, c_kpi4, c_kpi5 = st.columns(5)
+        c_kpi1.metric("Total Views", f"{tot_views:,}", delta=delta_v)
+        c_kpi2.metric("Total Likes", f"{tot_likes:,}", delta=delta_l)
+        c_kpi3.metric("Total Replies", f"{tot_rep:,}", delta=delta_r)
+        c_kpi4.metric("Total Reposts", f"{tot_rp:,}", delta=delta_rp)
+        c_kpi5.metric("Post Sukses", f"{tot_success:,}", delta=delta_s)
+
+        st.markdown("---")
+
+        # ======================================================================
+        # BARIS 1: ENGAGEMENT TRAFFIC & WINNING HOOK COPIES (Sesuai Mockup)
+        # ======================================================================
+        col_trf, col_hk = st.columns([1, 1])
+
+        with col_trf:
+            st.markdown("##### 📈 ENGAGEMENT TRAFFIC (Daily Views)")
+            st.caption("Tren views harian terakumulasi dari postingan berstatus POSTED:")
+            if not df_filtered.empty and tot_views > 0:
+                daily_trend = df_filtered.groupby("_parsed_date")[v_col].sum().reset_index()
+                daily_trend.rename(columns={"_parsed_date": "Tanggal", v_col: "Views"}, inplace=True)
+                daily_trend["Tanggal"] = daily_trend["Tanggal"].astype(str)
+                st.line_chart(daily_trend.set_index("Tanggal")["Views"], height=280)
+            else:
+                st.info("Belum ada data traffic views pada rentang filter ini.")
+
+        with col_hk:
+            st.markdown("##### 🏆 WINNING HOOK COPIES (TOP 5)")
+            st.caption("Postingan dengan jangkauan views & interaksi tertinggi:")
+            if not df_filtered.empty and tot_views > 0:
+                top5 = df_filtered.sort_values(by=v_col, ascending=False).head(5)
+                for rank_idx, (_, row) in enumerate(top5.iterrows(), start=1):
                     v_val = int(row.get(v_col, 0))
-                    l_val = int(row.get(l_col, 0)) if l_col else 0
+                    l_val = int(row.get(l_col, 0))
+                    r_val = int(row.get(r_col, 0))
                     d_val = str(row.get(date_col, "")) if date_col else ""
                     t_val = str(row.get(time_col, "")) if time_col else ""
                     main_t = str(row.get(text_col, "")) if text_col else ""
                     rep_t = str(row.get(reply_col, "")) if reply_col else ""
 
-                    with st.expander(f"👁️ {v_val:,} Views | ❤️ {l_val:,} Likes — {d_val} {t_val}"):
-                        st.markdown(f"**Teks Utama:**\n\n> {main_t}")
-                        if rep_t:
-                            st.markdown(f"**CTA Balasan:** `{rep_t}`")
+                    with st.expander(f"#{rank_idx} 👁️ {v_val:,} Views | ❤️ {l_val:,} | 💬 {r_val:,} — {d_val} {t_val}"):
+                        st.markdown(f"**Teks Postingan Utama:**\n\n> {main_t}")
+                        if rep_t and rep_t.lower() != "nan":
+                            st.markdown(f"**Balasan (Reply CTA):**\n\n`{rep_t}`")
             else:
-                st.info("Belum ada data views yang terkumpul di Google Sheets.")
+                st.info("Belum ada data riwayat postingan yang cukup untuk ditampilkan.")
 
-        with col_right_an:
-            st.write("##### 🛍️ Winning Products (Produk Paling Diminati)")
-            st.caption("Akumulasi views tertinggi per link affiliate:")
-            link_col = next((c for c in df_posted.columns if any(k in c.lower() for k in ["link", "affiliate"])), None)
-            if v_col and link_col and not df_posted.empty:
-                valid_links = df_posted[df_posted[link_col].astype(str).str.strip() != ""]
+        st.markdown("---")
+
+        # ======================================================================
+        # BARIS 2: WINNING AFFILIATE PRODUCTS & PEAK POSTING HOURS (Sesuai Mockup)
+        # ======================================================================
+        col_prod, col_hours = st.columns([1, 1])
+
+        with col_prod:
+            st.markdown("##### 🛒 WINNING AFFILIATE PRODUCTS")
+            st.caption("Akumulasi views tertinggi berdasarkan produk / link affiliate:")
+            if not df_filtered.empty and link_col:
+                valid_links = df_filtered[df_filtered[link_col].astype(str).str.strip().str.startswith("http")]
                 if not valid_links.empty:
-                    prod_stats = valid_links.groupby(link_col)[v_col].sum().reset_index()
-                    prod_stats = prod_stats.sort_values(by=v_col, ascending=False)
+                    prod_stats = valid_links.groupby(link_col).agg(
+                        Total_Views=(v_col, "sum"),
+                        Total_Likes=(l_col, "sum"),
+                        Total_Post=(v_col, "count")
+                    ).reset_index()
+
+                    # Merge dengan metadata Products jika ada
                     if raw_prods:
                         df_p_meta = pd.DataFrame(raw_prods)
                         p_link_meta = next((c for c in df_p_meta.columns if any(k in c.lower() for k in ["link", "affiliate"])), None)
-                        p_name_meta = next((c for c in df_p_meta.columns if any(k in c.lower() for k in ["name", "nama"])), None)
-                        if p_link_meta and p_name_meta:
-                            prod_stats = pd.merge(prod_stats, df_p_meta[[p_name_meta, p_link_meta]], left_on=link_col, right_on=p_link_meta, how="left")
-                            prod_stats = prod_stats[[p_name_meta, v_col, link_col]].rename(columns={p_name_meta: "Nama Produk", v_col: "Total Views", link_col: "Link"})
-                    st.dataframe(prod_stats, use_container_width=True, height=280)
-                else:
-                    st.info("Belum ada link produk di baris postingan.")
-            else:
-                st.info("Data link produk belum cukup untuk dianalisa.")
+                        p_name_meta = next((c for c in df_p_meta.columns if any(k in c.lower() for k in ["name", "nama", "product"])), None)
+                        p_cat_meta = next((c for c in df_p_meta.columns if "cat" in c.lower()), None)
 
+                        if p_link_meta and p_name_meta:
+                            cols_to_merge = [p_name_meta, p_link_meta]
+                            if p_cat_meta:
+                                cols_to_merge.append(p_cat_meta)
+                            prod_stats = pd.merge(prod_stats, df_p_meta[cols_to_merge], left_on=link_col, right_on=p_link_meta, how="left")
+                            prod_stats["Product"] = prod_stats[p_name_meta].fillna(prod_stats[link_col])
+                            prod_stats["Category"] = prod_stats[p_cat_meta].fillna("General") if p_cat_meta else "General"
+                        else:
+                            prod_stats["Product"] = prod_stats[link_col]
+                            prod_stats["Category"] = "General"
+                    else:
+                        prod_stats["Product"] = prod_stats[link_col]
+                        prod_stats["Category"] = "General"
+
+                    prod_stats = prod_stats.sort_values(by="Total_Views", ascending=False).head(10)
+                    display_df = prod_stats[["Product", "Category", "Total_Views", "Total_Post", link_col]].rename(
+                        columns={"Total_Views": "Views", "Total_Post": "Posts", link_col: "Link"}
+                    )
+
+                    st.dataframe(
+                        display_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Views": st.column_config.NumberColumn("Total Views", format="%d"),
+                            "Posts": st.column_config.NumberColumn("Jumlah Post", format="%d"),
+                            "Link": st.column_config.LinkColumn("Tautan Lapak")
+                        },
+                        height=260
+                    )
+                else:
+                    st.info("Belum ada link produk yang memiliki views pada filter ini.")
+            else:
+                st.info("Data produk belum mencukupi.")
+
+        with col_hours:
+            st.markdown("##### ⏰ PEAK POSTING HOURS (WIB)")
+            st.caption("Rata-rata views postingan berdasarkan jam tayang:")
+            if not df_filtered.empty and time_col:
+                df_filtered["hour_num"] = df_filtered[time_col].astype(str).apply(
+                    lambda x: str(x).split(":")[0].zfill(2) if ":" in str(x) else "00"
+                )
+                hourly = df_filtered.groupby("hour_num")[v_col].mean().reset_index()
+                hourly["Jam"] = hourly["hour_num"].apply(lambda h: f"{h}:00")
+                st.bar_chart(hourly.set_index("Jam")[v_col], height=260)
+            else:
+                st.info("Data jam postingan belum tersedia.")
+
+        # Tombol Unduh Laporan Filtered Data ke CSV
         st.divider()
-        st.write("##### ⏰ Jam Tayang Paling Efektif (Peak Hours)")
-        st.caption("Rata-rata views berdasarkan jam posting (WIB):")
-        time_col = next((c for c in df_posted.columns if any(k in c.lower() for k in ["time", "jam"])), None)
-        if v_col and time_col and not df_posted.empty:
-            df_posted["hour_num"] = df_posted[time_col].astype(str).apply(lambda x: str(x).split(":")[0].zfill(2) if ":" in str(x) else "00")
-            hourly = df_posted.groupby("hour_num")[v_col].mean().reset_index()
-            hourly["Jam"] = hourly["hour_num"].apply(lambda h: f"{h}:00 WIB")
-            st.bar_chart(hourly.set_index("Jam")[v_col], height=240)
-    else:
-        st.info("Belum ada data postingan di spreadsheet.")
+        csv_export = df_filtered.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="📥 Unduh Data Analitik (CSV)",
+            data=csv_export,
+            file_name=f"threads_analytics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            use_container_width=False
+        )
