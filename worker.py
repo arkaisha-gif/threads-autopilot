@@ -64,14 +64,26 @@ VIRAL_OBSERVATIONS = [
     "Opini santai tentang hal yang sering diromantisasi padahal aslinya melelahkan."
 ]
 
-# CTA untuk Model 1 (Link langsung di post utama - 1 Post)
-DIRECT_CTA_TEMPLATES = [
-    "Belinya disini yaa 👇\n🔗 {link}",
-    "Spill lapak aslinya di sini yaa:\n🔗 {link}",
-    "Beli yang ori langsung di sini biar gak zonk:\n🔗 {link}",
-    "Buat yang mau samaan langsung ambil di sini:\n🔗 {link}",
-    "Mumpung lagi promo, cek langsung di sini ya:\n🔗 {link}",
-    "Yang butuh solusinya juga, link toko resminya di sini:\n🔗 {link}"
+# Variasi posisi link & CTA luwes untuk Model 1 (1 Post)
+MODEL_1_POSITION_PROMPTS = [
+    (
+        "POSISI LINK: AWAL KALIMAT.\n"
+        "Letakkan placeholder '[LINK_PRODUK]' di kalimat pembuka/awal cerita secara natural dan luwes. "
+        "Contoh alur: 'Gara-gara iseng nyobain lapak ini [LINK_PRODUK], drama kamar mandi berlumut akhirnya kelar...' "
+        "CTA harus mengalir santai menyatu dengan curhat, DILARANG pakai template kaku, panah emoji berlebihan, atau bahasa sales."
+    ),
+    (
+        "POSISI LINK: TENGAH KALIMAT.\n"
+        "Selipkan placeholder '[LINK_PRODUK]' di tengah-tengah cerita saat menyebutkan solusi, keunggulan, atau momen kepuasan pakai barangnya. "
+        "Contoh alur: 'Ternyata rahasia wajan gak gampang gosong cuma pakai silikon ini [LINK_PRODUK], beneran nol drama pas cuci...' "
+        "CTA harus luwes seperti celetukan ngobrol sama temen dekat, jangan terasa jualan."
+    ),
+    (
+        "POSISI LINK: AKHIR KALIMAT.\n"
+        "Letakkan placeholder '[LINK_PRODUK]' di akhir cerita dengan kalimat rekomendasi penutup yang santai dan relate. "
+        "Contoh alur: '...daripada beli yang tiruan gampang patah, mending cek lapak aslinya di [LINK_PRODUK] mumpung lagi diskon.' "
+        "DILARANG pakai kalimat klise sales seperti 'Belinya disini ya' atau 'Klik link di bawah'."
+    )
 ]
 
 # CTA pembuka untuk Model 2 (Link di kolom balasan - 2 Post)
@@ -109,8 +121,25 @@ def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
         return t[:max_chars - 3].rstrip() + "..."
     return t
 
+def format_model_1_text(raw_text: str, aff_link: str) -> str:
+    """Menyematkan tautan affiliate ke posisi placeholder (awal/tengah/akhir) secara luwes."""
+    pattern = r'\[\s*(?:LINK_PRODUK|LINK|LINK PRODUK)\s*\]'
+    if re.search(pattern, raw_text, flags=re.IGNORECASE):
+        raw_text = re.sub(pattern, aff_link, raw_text, flags=re.IGNORECASE)
+    elif "[LINK_PRODUK]" in raw_text:
+        raw_text = raw_text.replace("[LINK_PRODUK]", aff_link)
+    
+    clean_txt = sanitize_threads_text(raw_text)
+
+    # Fallback aman jika AI tidak menyertakan placeholder sama sekali
+    if aff_link not in clean_txt:
+        clean_txt = f"{clean_txt}\n\nLapak aslinya di sini ya: {aff_link}"
+        clean_txt = sanitize_threads_text(clean_txt)
+
+    return clean_txt
+
 def _safe_float(val) -> float:
-    """Helper aman untuk konversi nilai metrik numerik."""
+    """Helper konversi numerik yang aman dari error parsing."""
     s = str(val).strip().replace(',', '')
     try:
         return float(s)
@@ -445,10 +474,7 @@ def decide_post_model_by_ai(slot_time: str, model_weights: dict) -> bool:
     return random.random() < w1
 
 def decide_post_model_for_account(acc_name: str, cfg_data: dict, slot_time: str, rows: list, default_model_stats: dict) -> bool:
-    """Menentukan secara fleksibel apakah post untuk acc_name menggunakan:
-    - True  = Model 1 (Direct: Link di post utama, 1 post saja)
-    - False = Model 2 (2 Posts: Hook di utama, Link di kolom reply)
-    Berdasarkan konfigurasi per akun di Config (disetel via Streamlit):
+    """Menentukan format postingan per-akun:
     - MANUAL: Berdasarkan persentase slider model_1_ratio_{acc_name}
     - AI_DYNAMIC: Diserahkan ke perhitungan bandit AI (decide_post_model_by_ai)"""
     mode_key = f"model_decision_mode_{acc_name}"
@@ -636,20 +662,20 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                 p_cur = pick_weighted_product(prods_with_media if prods_with_media else ready_prods)
 
                 if direct_to_main:
-                    # Model 1: Link langsung di post utama (1 post saja, reply kosong)
+                    # Model 1: Penempatan Link Fleksibel (Awal / Tengah / Akhir) dengan CTA Kontekstual Luwes
+                    pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
                     prompt = (
                         f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
                         f"Tulis 1 postingan pengantar video untuk produk: {p_cur['product_name']}.\n"
                         f"Highlight: {p_cur.get('highlight', '')}. Vibe: {vibe}.\n{winning_context_prompt}\n"
-                        f"ATURAN:\n"
-                        f"1. DILARANG pakai kata 'POV:', '[Teks Utama]', atau bahasa iklan kaku. Langsung ceritakan masalah nyata sehari-hari.\n"
-                        f"2. JANGAN taruh link di dalam teks buatanmu (link toko akan ditempel otomatis di bawah).\n"
-                        f"3. Maksimal 230 karakter tanpa tanda kutip."
+                        f"ATURAN KHUSUS:\n"
+                        f"1. {pos_rule}\n"
+                        f"2. Tulis placeholder persis: '[LINK_PRODUK]' (nanti sistem yang menempelkan link asli).\n"
+                        f"3. DILARANG pakai kata 'POV:', '[Teks Utama]', atau gaya iklan brosur kaku.\n"
+                        f"4. Maksimal 260 karakter tanpa tanda kutip."
                     )
                     raw_out = call_gemini(prompt)
-                    clean_main_txt = sanitize_threads_text(raw_out)
-                    cta_direct = random.choice(DIRECT_CTA_TEMPLATES).format(link=p_cur['affiliate_link'])
-                    full_main_post = f"{clean_main_txt}\n\n{cta_direct}"
+                    full_main_post = format_model_1_text(raw_out, p_cur['affiliate_link'])
 
                     media_formatted = prepare_media_for_post(str(p_cur.get("media_url", "")).strip(), duplicate_single_video=True)
                     acc_rows.append([today_str, slot_time, acc_name, full_main_post, media_formatted, "", p_cur['affiliate_link'], "PENDING", "", "", "", ""])
@@ -683,20 +709,24 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
             else:
                 p_cur = pick_weighted_product(prods_text_only)
                 if direct_to_main:
+                    # Model 1: Penempatan Link Fleksibel (Awal / Tengah / Akhir) dengan CTA Kontekstual Luwes
+                    pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
                     prompt = (
                         f"Tulis 1 postingan teks Threads tentang produk: {p_cur['product_name']}.\n"
-                        f"Keunggulan: {p_cur.get('highlight', '')}. Vibe: {vibe}.\n{winning_context_prompt}"
-                        f"DILARANG pakai label '[Teks Utama]' atau 'POV:'. Maksimal 230 karakter."
+                        f"Keunggulan: {p_cur.get('highlight', '')}. Vibe: {vibe}.\n{winning_context_prompt}\n"
+                        f"ATURAN KHUSUS:\n"
+                        f"1. {pos_rule}\n"
+                        f"2. Tulis placeholder persis: '[LINK_PRODUK]' (nanti sistem yang menempelkan link asli).\n"
+                        f"3. DILARANG pakai label '[Teks Utama]' atau 'POV:'.\n"
+                        f"4. Maksimal 260 karakter tanpa tanda kutip."
                     )
                     raw_out = call_gemini(prompt)
-                    clean_main_txt = sanitize_threads_text(raw_out)
-                    cta_direct = random.choice(DIRECT_CTA_TEMPLATES).format(link=p_cur['affiliate_link'])
-                    full_main_post = f"{clean_main_txt}\n\n{cta_direct}"
+                    full_main_post = format_model_1_text(raw_out, p_cur['affiliate_link'])
                     acc_rows.append([today_str, slot_time, acc_name, full_main_post, "", "", p_cur['affiliate_link'], "PENDING", "", "", "", ""])
                 else:
                     prompt = (
                         f"Tulis postingan teks Threads tentang produk: {p_cur['product_name']}.\n"
-                        f"Keunggulan: {p_cur.get('highlight', '')}. Vibe: {vibe}.\n{winning_context_prompt}"
+                        f"Keunggulan: {p_cur.get('highlight', '')}. Vibe: {vibe}.\n{winning_context_prompt}\n"
                         f"DILARANG pakai label '[Teks Utama]' atau 'POV:'.\n"
                         f"PISAHKAN HANYA DENGAN '---REPLY_CTA---' diikuti 1 kalimat balasan CTA singkat."
                     )
