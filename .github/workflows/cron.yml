@@ -2,19 +2,14 @@ name: Threads Autopilot Runner
 
 on:
   schedule:
-    # Menggunakan offset menit (14 dan 44) agar tidak bentrok dengan antrean padat jam 00/30 di server GitHub
-    - cron: '14,44 * * * *'
-  workflow_dispatch: # Tombol pemicu manual via dashboard GitHub
-
-# Mencegah eksekusi ganda jika worker sebelumnya belum selesai
-concurrency:
-  group: threads-autopilot-worker
-  cancel-in-progress: false
+    # Berjalan di menit ke-10 dan ke-40 tiap jam (menghindari jam sibuk menit 00 dan 30)
+    - cron: '10,40 * * * *'
+  workflow_dispatch:
 
 jobs:
   run-worker:
     runs-on: ubuntu-latest
-    timeout-minutes: 10 # Batasi durasi maksimal agar kuota menit tidak habis jika script hang
+    timeout-minutes: 15 # Otomatis stop jika lewat 15 menit agar tidak menggantung 21 menit lagi
 
     steps:
       - name: Checkout Repository
@@ -24,7 +19,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip' # Cache dependencies agar hemat waktu eksekusi 1-2 menit tiap run
+          cache: 'pip'
 
       - name: Install Dependencies
         run: |
@@ -36,6 +31,6 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GCP_CREDS_BASE64: ${{ secrets.GCP_CREDS_BASE64 }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
-          PYTHONUNBUFFERED: "1" # Memastikan log langsung tampil realtime di konsol
+          PYTHONUNBUFFERED: "1"
         run: |
           python worker.py
