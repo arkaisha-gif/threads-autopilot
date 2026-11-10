@@ -1,0 +1,51 @@
+name: Threads Autopilot Estafet Runner
+
+on:
+  schedule:
+    # Memicu antrean estafet di menit ke-12 dan ke-42 setiap jam
+    - cron: '12,42 * * * *'
+  workflow_dispatch:
+
+# Menahan cron berikutnya di antrean (Pending) agar langsung menyambung saat sesi 2 jam selesai
+concurrency:
+  group: threads-autopilot-estafet
+  cancel-in-progress: false
+
+jobs:
+  run-worker-loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 135 # Maksimal hidup 2 jam 15 menit per estafet
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Threads Worker (Loop Otomatis Tiap 20 Menit)
+        env:
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GCP_CREDS_BASE64: ${{ secrets.GCP_CREDS_BASE64 }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          for i in 1 2 3 4 5 6; do
+            echo "===================================================="
+            echo "🚀 SIKLUS KE-$i | $(TZ='Asia/Jakarta' date '+%Y-%m-%d %H:%M:%S WIB')"
+            echo "===================================================="
+            python worker.py || echo "⚠️ Peringatan pada siklus ke-$i, lanjut ke siklus berikutnya..."
+            
+            if [ $i -lt 6 ]; then
+              echo "⏳ Selesai siklus ke-$i. Istirahat 20 menit sebelum siklus berikutnya..."
+              sleep 1200
+            fi
+          done
