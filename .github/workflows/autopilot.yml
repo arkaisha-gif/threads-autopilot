@@ -1,7 +1,14 @@
 name: Threads Autopilot Runner
 
 on:
-  workflow_dispatch:
+  schedule:
+    # Berjalan otomatis setiap 20 menit langsung di server GitHub
+    - cron: '*/20 * * * *'
+  workflow_dispatch: # Pemicu manual cadangan jika sewaktu-waktu ingin tes
+
+concurrency:
+  group: threads-autopilot-runner
+  cancel-in-progress: false
 
 jobs:
   run-worker:
