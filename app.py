@@ -21,7 +21,7 @@ st.set_page_config(
 
 TZ = pytz.timezone("Asia/Jakarta")
 
-# --- AMBIL KREDENSIAL (AMAN DARI CRASH SECRETS / ENV) ---
+# --- AMBIL KREDENSIAL ---
 def get_secret(key, default=""):
     try:
         if key in st.secrets:
@@ -66,7 +66,6 @@ TOPIC_PILLARS = {
     ]
 }
 
-# --- ATURAN GAYA BAHASA (ANTI BROSUR SALES) ---
 PROMPT_RULES_CLEAN = """
 DILARANG KERAS (BLACKLIST TOPIK & KATA):
 1. JANGAN PERNAH bahas: gaji, tanggal tua, bokek, reksadana, tabungan, investasi finansial, bayar kos, biaya hidup, atau hitung-hitungan uang.
@@ -80,7 +79,6 @@ PANDUAN STRUKTUR & GAYA HOOK 1-3 DETIK:
 - Dilarang pakai hashtag (#), dilarang pakai tanda kutip dua.
 """
 
-# --- 15 MATRIKS HOOK EMOSIONAL & RELASIONAL MULTI-TRIGGER ---
 VIRAL_HOOK_PATTERNS = [
     "Trigger Drama Relasi (Pasangan/Mertua): Awali baris pertama dengan dialog/reaksi pasangan atau mertua huruf kapital (misal: 'SUAMI: KAMU KALAU NYUCI KOK RIBET BANGET? 😭😂' atau 'MERTUA DATANG MENDADAK: KOK RUMAH BERSIH BANGET? 😭').",
     "Trigger Nyaris Malu (Social Anxiety): Awali baris pertama dengan momen horor/panik di tempat umum huruf kapital (misal: 'HAMPIR MALU DI RUANG MEETING KANTOR GARA-GARA BASKET 😭💀' atau 'MOMEN HOROR KUAH RENDANG TUMPAH KE KEMEJA PUTIH 😭😭').",
@@ -112,7 +110,6 @@ CLOSING_NARRATIVES = [
     "Yang mau CO taro keranjang dulu aja, mumpung vouchernya masih aktif di sini:"
 ]
 
-# --- STRATEGI MODEL 1: PENEMPATAN FLEKSIBEL (AWAL / TENGAH / AKHIR) & CTA LUWES ---
 MODEL_1_POSITION_PROMPTS = [
     (
         "POSISI LINK: AWAL KALIMAT.\n"
@@ -157,7 +154,6 @@ def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
     return t
 
 def format_model_1_text(raw_text: str, aff_link: str) -> str:
-    """Menyematkan tautan affiliate ke posisi placeholder (awal/tengah/akhir) secara luwes."""
     pattern = r'\[\s*(?:LINK_PRODUK|LINK|LINK PRODUK)\s*\]'
     if re.search(pattern, raw_text, flags=re.IGNORECASE):
         raw_text = re.sub(pattern, aff_link, raw_text, flags=re.IGNORECASE)
@@ -183,7 +179,6 @@ def _safe_float(val) -> float:
 # MODUL AI SELF-LEARNING & DECISION ENGINE (MODEL 1 VS MODEL 2)
 # ==============================================================================
 def extract_self_learning_patterns(data_items):
-    """Mengekstrak pola copywriting terbaik dan produk dengan konversi tertinggi dari data Sheets."""
     if not data_items:
         return {"winning_copies": [], "winning_products": {}}
 
@@ -232,7 +227,6 @@ def extract_self_learning_patterns(data_items):
     }
 
 def calculate_model_engagement_ratio(data_items, acc_filter=None):
-    """Menganalisis performa historis Model 1 vs Model 2 berdasarkan engagement riil."""
     m1_scores = []
     m2_scores = []
 
@@ -291,7 +285,6 @@ def calculate_model_engagement_ratio(data_items, acc_filter=None):
     }
 
 def decide_post_model_by_ai(slot_time: str, model_weights: dict) -> bool:
-    """Menentukan secara dinamis True = Model 1 (Direct), False = Model 2 (Reply)."""
     w1 = model_weights.get("weight_m1", 0.5)
     try:
         h = int(slot_time.split(":")[0])
@@ -304,7 +297,6 @@ def decide_post_model_by_ai(slot_time: str, model_weights: dict) -> bool:
     return random.random() < w1
 
 def decide_post_model_for_account(acc_name: str, cfg_data: dict, slot_time: str, data_items: list, default_model_stats: dict) -> bool:
-    """Menentukan format postingan per akun: Mode MANUAL (Persentase) atau AI_DYNAMIC."""
     mode_key = f"model_decision_mode_{acc_name}"
     mode = cfg_data.get(mode_key, cfg_data.get("model_decision_mode", "MANUAL")).strip().upper()
 
@@ -368,7 +360,6 @@ def get_spreadsheet():
         return None
     return client.open_by_key(SPREADSHEET_ID)
 
-# --- CACHE DATA READING ---
 @st.cache_data(ttl=60)
 def load_all_sheets_data():
     client = get_gspread_client()
@@ -521,35 +512,74 @@ def update_config_keys(sh_obj, kv_pairs: dict):
         else:
             cfg_ws.append_row([k, str(v)])
 
-# --- CALL GEMINI REST API (PRIORITAS PRO & SMART FALLBACK) ---
+# --- CALL GEMINI REST API (AUTO DISCOVERY & ROBUST RETRY) ---
 def call_gemini_core(prompt: str) -> tuple:
     key = str(AI_API_KEY).strip().replace("'", "").replace('"', "") if AI_API_KEY else ""
     if not key:
-        raise Exception("API Key Gemini (AI_API_KEY) belum disetel!")
+        raise Exception("API Key Gemini (AI_API_KEY) belum disetel di Secrets!")
 
-    target_models = ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"]
+    # 1. Cek daftar model yang benar-benar aktif & diizinkan untuk API Key ini
+    valid_models = []
+    discovery_error = ""
+    for ver in ["v1beta", "v1"]:
+        try:
+            r = requests.get(f"https://generativelanguage.googleapis.com/{ver}/models?key={key}", timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                for m in data.get("models", []):
+                    if "generateContent" in m.get("supportedGenerationMethods", []):
+                        valid_models.append((ver, m["name"].replace("models/", "")))
+            else:
+                err_data = r.json() if "application/json" in r.headers.get("Content-Type", "") else {}
+                discovery_error = err_data.get("error", {}).get("message", r.text[:120])
+        except Exception as e:
+            discovery_error = str(e)[:100]
+
+    # Prioritaskan model terbaik dari daftar yang tersedia
+    preferred_order = ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-pro"]
+    def get_rank(item):
+        _, name = item
+        for idx, pref in enumerate(preferred_order):
+            if pref in name.lower():
+                return idx
+        return 99
+
+    valid_models.sort(key=get_rank)
+
+    # Fallback default jika endpoint list_models dibatasi oleh kebijakan IAM
+    if not valid_models:
+        valid_models = [
+            ("v1beta", "gemini-1.5-flash"),
+            ("v1beta", "gemini-1.5-pro"),
+            ("v1", "gemini-1.5-flash"),
+            ("v1beta", "gemini-2.0-flash")
+        ]
+
+    # 2. Eksekusi generate content dengan model yang valid
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.85, "topP": 0.95, "maxOutputTokens": 800}
     }
 
-    errors = []
-    for m_name in target_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={key}"
+    last_errors = []
+    for ver, m_name in valid_models:
+        url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
         headers = {"Content-Type": "application/json"}
         try:
-            r = requests.post(url, headers=headers, json=payload, timeout=25)
-            if r.status_code == 200:
-                res = r.json()
-                if "candidates" in res and res["candidates"]:
-                    return res["candidates"][0]["content"]["parts"][0]["text"].strip(), f"v1beta/{m_name}"
+            res = requests.post(url, headers=headers, json=payload, timeout=25)
+            if res.status_code == 200:
+                res_data = res.json()
+                if "candidates" in res_data and res_data["candidates"]:
+                    return res_data["candidates"][0]["content"]["parts"][0]["text"].strip(), f"{ver}/{m_name}"
             else:
-                errors.append(f"{m_name} ({r.status_code})")
+                err_data = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
+                msg = err_data.get("error", {}).get("message", res.text[:100])
+                last_errors.append(f"{m_name} ({res.status_code}: {msg})")
         except Exception as e:
-            errors.append(f"{m_name} ({str(e)[:50]})")
+            last_errors.append(f"{m_name} ({str(e)[:50]})")
 
-    err_msg = " | ".join(errors[:2]) if errors else "Gagal menghubungi Gemini API."
-    raise Exception(err_msg)
+    err_summary = " | ".join(last_errors[:2]) if last_errors else discovery_error
+    raise Exception(f"Gagal generate: {err_summary}")
 
 def call_gemini(prompt: str) -> str:
     text, _ = call_gemini_core(prompt)
@@ -635,7 +665,7 @@ tabs = st.tabs([
 ])
 
 # ==============================================================================
-# TAB 1: KONTROL AUTOPILOT (DILENGKAPI MODEL 1 & 2 DENGAN AI SELF-LEARNING)
+# TAB 1: KONTROL AUTOPILOT
 # ==============================================================================
 with tabs[0]:
     st.subheader("Pengaturan Jadwal & Komposisi Harian Autopilot")
@@ -808,9 +838,6 @@ with tabs[0]:
             except Exception as e:
                 st.error(f"Gagal menyimpan: {e}")
 
-    # ==========================================================================
-    # PENGATURAN KOMPOSISI MODEL 1 & 2 PER AKUN (BY PERCENTAGE / AI)
-    # ==========================================================================
     st.divider()
     st.write("#### ⚖️ Pengaturan Komposisi Model Postingan per Akun (Model 1 vs Model 2)")
     st.caption("Tentukan format postingan per akun: Model 1 (Direct Link fleksibel di Post Utama) vs Model 2 (Link di Kolom Balasan) via persentase manual atau diserahkan ke AI.")
@@ -952,7 +979,7 @@ with tabs[0]:
                                     w = 1.2
                                 else:
                                     w = 1.0 + min(sc / 150.0, 6.0)
-                                weights.append(w)
+                            weights.append(w)
                             return random.choices(prod_list, weights=weights, k=1)[0]
 
                         for acc_target in target_accounts_to_run:
@@ -977,7 +1004,6 @@ with tabs[0]:
                                     prod = pick_weighted_product_app(prods_with_media if prods_with_media else ready_prods)
 
                                     if direct_to_main:
-                                        # Model 1: Penempatan Link Fleksibel (Awal / Tengah / Akhir) - 1 Post, Reply Kosong
                                         pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
                                         prompt_a = (
                                             f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
@@ -996,7 +1022,6 @@ with tabs[0]:
 
                                         new_rows.append([today_str, slot_time, acc_target, full_main_post, final_media, "", prod["affiliate_link"], "PENDING", "", "", "", ""])
                                     else:
-                                        # Model 2: Hook di post utama, Link di Reply
                                         chosen_hook = random.choice(VIRAL_HOOK_PATTERNS)
                                         prompt_a = (
                                             f"Tulis 1 postingan Threads bahasa Indonesia penahan jempol (stop scrolling) penonton video untuk produk: '{prod['product_name']}' "
@@ -1019,7 +1044,6 @@ with tabs[0]:
                                     prod = pick_weighted_product_app(prods_text_only)
 
                                     if direct_to_main:
-                                        # Model 1 Teks Saja
                                         pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
                                         prompt_a = (
                                             f"Tulis 1 postingan teks Threads tentang produk: '{prod['product_name']}'.\n"
@@ -1035,7 +1059,6 @@ with tabs[0]:
                                         full_main_post = format_model_1_text(raw_out, prod["affiliate_link"])
                                         new_rows.append([today_str, slot_time, acc_target, full_main_post, "", "", prod["affiliate_link"], "PENDING", "", "", "", ""])
                                     else:
-                                        # Model 2 Teks Saja
                                         chosen_hook = random.choice(VIRAL_HOOK_PATTERNS)
                                         prompt_a = (
                                             f"Tulis 1 postingan Threads bahasa Indonesia rekomendasi teks tanpa media untuk produk: '{prod['product_name']}' "
@@ -1062,7 +1085,7 @@ with tabs[0]:
                     st.error(f"Terjadi kesalahan: {ex}")
 
 # ==============================================================================
-# TAB 2: HIJACK THREAD VIRAL (KOMENTAR VIDEO / TEKS)
+# TAB 2: HIJACK THREAD VIRAL
 # ==============================================================================
 with tabs[1]:
     st.subheader("🎯 Thread Hijacking (Nimbrung di Postingan Viral)")
@@ -1547,7 +1570,7 @@ with tabs[5]:
                     st.rerun()
 
 # ==============================================================================
-# TAB 7: ANALISA DATA & AI SELF-LEARNING (FORMAT SESUAI MOCKUP DASHBOARD)
+# TAB 7: ANALISA DATA & AI SELF-LEARNING
 # ==============================================================================
 with tabs[6]:
     st.subheader("📊 Analisa Engagement & AI Self-Learning")
@@ -1591,7 +1614,6 @@ with tabs[6]:
         else:
             df_base = df_raw.copy()
 
-        # CONTROL & FILTER BAR
         st.markdown("#### 🎛️ Filter Analitik")
         f_col1, f_col2, f_col3, f_col4 = st.columns([2, 2, 2, 1])
 
@@ -1689,7 +1711,6 @@ with tabs[6]:
 
         st.markdown("---")
 
-        # KPI CARDS DENGAN DELTA
         c_kpi1, c_kpi2, c_kpi3, c_kpi4, c_kpi5 = st.columns(5)
         c_kpi1.metric("Total Views", f"{tot_views:,}", delta=delta_v)
         c_kpi2.metric("Total Likes", f"{tot_likes:,}", delta=delta_l)
@@ -1699,7 +1720,6 @@ with tabs[6]:
 
         st.markdown("---")
 
-        # BARIS 1: ENGAGEMENT TRAFFIC & WINNING HOOK COPIES
         col_trf, col_hk = st.columns([1, 1])
 
         with col_trf:
@@ -1736,7 +1756,6 @@ with tabs[6]:
 
         st.markdown("---")
 
-        # BARIS 2: WINNING AFFILIATE PRODUCTS & PEAK POSTING HOURS
         col_prod, col_hours = st.columns([1, 1])
 
         with col_prod:
