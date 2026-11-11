@@ -15,7 +15,7 @@ load_dotenv()
 
 TZ = pytz.timezone("Asia/Jakarta")
 
-# Batas aman per siklus agar worker selesai dalam 2-3 menit (Anti-Timeout)
+# Batas aman per eksekusi agar worker selesai < 4 menit
 MAX_DRAFTS_PER_RUN = 8
 MAX_PUBLISH_PER_RUN = 3
 MAX_INSIGHTS_PER_RUN = 15
@@ -145,8 +145,50 @@ def _safe_float(val) -> float:
         return 0.0
 
 # ==========================================
-# GEMINI API ENGINE (PRIORITAS PRO & DETAILED LOG)
+# GEMINI API ENGINE (DYNAMIC AUTO-DISCOVERY)
 # ==========================================
+CACHED_WORKING_MODEL = None
+
+def get_best_model(key: str) -> tuple:
+    global CACHED_WORKING_MODEL
+    if CACHED_WORKING_MODEL:
+        return CACHED_WORKING_MODEL
+
+    available = []
+    for ver in ["v1beta", "v1"]:
+        url = f"https://generativelanguage.googleapis.com/{ver}/models?key={key}"
+        try:
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                for m in data.get("models", []):
+                    methods = m.get("supportedGenerationMethods", [])
+                    if "generateContent" in methods:
+                        clean_name = m["name"].replace("models/", "")
+                        available.append((ver, clean_name))
+        except Exception:
+            pass
+
+    # Urutan prioritas sesuai rekomendasi resmi Google
+    preferred_order = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "flash"]
+    def rank_model(item):
+        _, name = item
+        for idx, pref in enumerate(preferred_order):
+            if pref in name.lower():
+                return idx
+        return 99
+
+    available.sort(key=rank_model)
+
+    if available:
+        CACHED_WORKING_MODEL = available[0]
+        print(f"[GEMINI DISCOVERY] Menggunakan model aktif: {CACHED_WORKING_MODEL[0]}/{CACHED_WORKING_MODEL[1]}")
+        return CACHED_WORKING_MODEL
+
+    # Fallback langsung ke gemini-2.5-flash sesuai pesan API Google
+    CACHED_WORKING_MODEL = ("v1beta", "gemini-2.5-flash")
+    return CACHED_WORKING_MODEL
+
 def call_gemini(prompt: str) -> str:
     if not AI_API_KEYS:
         raise Exception("API Key Gemini (AI_API_KEY) tidak ditemukan di Secrets!")
@@ -160,36 +202,29 @@ def call_gemini(prompt: str) -> str:
         }
     }
 
-    # Prioritas utama: Gemini 1.5 Pro, cadangan: Gemini 1.5 Flash dan 2.0 Flash
-    models_to_try = [
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash"
-    ]
-
     last_errors = []
 
     for key_idx, key in enumerate(AI_API_KEYS, start=1):
-        for m_name in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={key}"
-            headers = {"Content-Type": "application/json"}
-            try:
-                res = requests.post(url, headers=headers, json=payload, timeout=25)
-                if res.status_code == 200:
-                    data = res.json()
-                    if "candidates" in data and data["candidates"]:
-                        text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                        if text_out:
-                            return text_out
-                else:
-                    err_json = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
-                    err_msg = err_json.get("error", {}).get("message", res.text[:120])
-                    print(f"   [GEMINI DEBUG] Key #{key_idx} | {m_name} (HTTP {res.status_code}): {err_msg}")
-                    last_errors.append(f"{m_name} (HTTP {res.status_code}: {err_msg})")
-                    if res.status_code == 429:
-                        time.sleep(3)
-            except Exception as e:
-                last_errors.append(f"{m_name} Network Error: {str(e)[:100]}")
+        ver, m_name = get_best_model(key)
+        url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
+        headers = {"Content-Type": "application/json"}
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=25)
+            if res.status_code == 200:
+                data = res.json()
+                if "candidates" in data and data["candidates"]:
+                    text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    if text_out:
+                        return text_out
+            else:
+                err_json = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
+                err_msg = err_json.get("error", {}).get("message", res.text[:120])
+                print(f"   [GEMINI DEBUG] Key #{key_idx} | {m_name} (HTTP {res.status_code}): {err_msg}")
+                last_errors.append(f"{m_name} (HTTP {res.status_code}: {err_msg})")
+                if res.status_code == 429:
+                    time.sleep(3)
+        except Exception as e:
+            last_errors.append(f"{m_name} Network Error: {str(e)[:100]}")
 
     err_summary = " | ".join(last_errors[-2:]) if last_errors else "Request gagal"
     raise Exception(f"Google API Menolak Permintaan -> {err_summary}")
