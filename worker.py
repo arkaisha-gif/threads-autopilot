@@ -15,7 +15,7 @@ load_dotenv()
 
 TZ = pytz.timezone("Asia/Jakarta")
 
-# Batas aman per eksekusi agar worker selalu selesai < 4 menit (Anti-Timeout GitHub Actions)
+# Batas aman per siklus agar worker selesai dalam 2-3 menit (Anti-Timeout)
 MAX_DRAFTS_PER_RUN = 8
 MAX_PUBLISH_PER_RUN = 3
 MAX_INSIGHTS_PER_RUN = 15
@@ -42,12 +42,14 @@ def get_secret(key, default=""):
 
 SPREADSHEET_ID = get_secret("SPREADSHEET_ID")
 GCP_CREDS_BASE64 = get_secret("GCP_CREDS_BASE64")
-AI_API_KEY = (
+
+RAW_AI_KEYS = (
     get_secret("AI_API_KEY")
     or os.environ.get("GEMINI_API_KEY")
     or os.environ.get("GOOGLE_API_KEY")
     or ""
 )
+AI_API_KEYS = [k.strip().replace("'", "").replace('"', "") for k in RAW_AI_KEYS.split(",") if k.strip()]
 
 # ==========================================
 # MATRIKS VIBE & PROMPT THREADS
@@ -91,7 +93,6 @@ MODEL_1_POSITION_PROMPTS = [
     )
 ]
 
-# CTA pembuka untuk Model 2 (Link di kolom balasan - 2 Post)
 FALLBACK_CTA_STARTERS = [
     "Awas dapet tiruan yang gampang rusak/tumpul ya, link official store yang beneran ori di sini:",
     "Biar gak capek nyari manual ketumpuk seller abal-abal, ambil di lapak aslinya di sini:",
@@ -104,20 +105,15 @@ def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
         return ""
     t = str(text).strip()
 
-    # 1. Bersihkan label buatan AI
     t = re.sub(r'^\s*\[\s*(?:Teks\s+)?(?:Utama|Balasan\s+CTA|CTA|Postingan|Main\s+Post|Reply\s+CTA)\s*\]\s*:?\s*', '', t, flags=re.IGNORECASE | re.MULTILINE)
     t = re.sub(r'^\s*(?:Teks\s+Utama|Teks\s+Balasan\s+CTA|Balasan\s+CTA|CTA\s+Reply|Postingan\s+Utama)\s*:\s*', '', t, flags=re.IGNORECASE | re.MULTILINE)
     t = re.sub(r'\[\s*(?:Teks\s+)?(?:Utama|Balasan\s+CTA|CTA|Postingan|Link)\s*\]', '', t, flags=re.IGNORECASE)
     t = t.replace("---REPLY_CTA---", "").strip()
 
-    # 2. Hapus tanda kutip pembungkus di awal & akhir jika ada
     if len(t) >= 2 and ((t.startswith('"') and t.endswith('"')) or (t.startswith("'") and t.endswith("'"))):
         t = t[1:-1].strip()
 
-    # 3. Bersihkan awalan klise "POV:"
     t = re.sub(r'^\s*POV\s*:\s*', '', t, flags=re.IGNORECASE | re.MULTILINE)
-
-    # 4. Ubah sebutan TikTok 'keranjang kuning' & 'link di bio' menjadi istilah Threads/Shopee
     t = re.sub(r'keranjang\s+kuning(?:nya)?', 'link toko resminya', t, flags=re.IGNORECASE)
     t = re.sub(r'link\s+di\s+bio', 'link di bawah', t, flags=re.IGNORECASE)
 
@@ -127,7 +123,6 @@ def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
     return t
 
 def format_model_1_text(raw_text: str, aff_link: str) -> str:
-    """Menyematkan tautan affiliate ke posisi placeholder (awal/tengah/akhir) secara luwes."""
     pattern = r'\[\s*(?:LINK_PRODUK|LINK|LINK PRODUK)\s*\]'
     if re.search(pattern, raw_text, flags=re.IGNORECASE):
         raw_text = re.sub(pattern, aff_link, raw_text, flags=re.IGNORECASE)
@@ -149,87 +144,55 @@ def _safe_float(val) -> float:
     except (ValueError, TypeError):
         return 0.0
 
-CACHED_GEMINI_PAIRS = None
-WORKING_MODEL_PAIR = None
-
-def get_gemini_pairs(key: str):
-    global CACHED_GEMINI_PAIRS
-    if CACHED_GEMINI_PAIRS is not None:
-        return CACHED_GEMINI_PAIRS
-
-    available = []
-    for ver in ["v1beta", "v1"]:
-        list_url = f"https://generativelanguage.googleapis.com/{ver}/models?key={key}"
-        try:
-            r = requests.get(list_url, timeout=8).json()
-            if "models" in r:
-                for m in r["models"]:
-                    if "generateContent" in m.get("supportedGenerationMethods", []):
-                        m_name = m["name"].replace("models/", "")
-                        if (ver, m_name) not in available:
-                            available.append((ver, m_name))
-        except Exception:
-            pass
-
-    preferred = ["2.5-flash", "2.0-flash", "1.5-flash", "flash", "pro"]
-    def get_rank(pair):
-        v, n = pair
-        for idx, pref in enumerate(preferred):
-            if pref in n.lower():
-                return idx
-        return 99
-
-    available.sort(key=get_rank)
-    if available:
-        CACHED_GEMINI_PAIRS = available[:4]
-        return CACHED_GEMINI_PAIRS
-
-    fallback = [
-        ("v1beta", "gemini-2.5-flash"),
-        ("v1beta", "gemini-2.0-flash"),
-        ("v1", "gemini-1.5-flash"),
-    ]
-    CACHED_GEMINI_PAIRS = fallback
-    return fallback
-
+# ==========================================
+# GEMINI API ENGINE (PRIORITAS PRO & DETAILED LOG)
+# ==========================================
 def call_gemini(prompt: str) -> str:
-    global WORKING_MODEL_PAIR
-    key = str(AI_API_KEY).strip().replace("'", "").replace('"', "") if AI_API_KEY else ""
-    if not key:
-        raise Exception("API Key Gemini (AI_API_KEY) tidak ditemukan!")
+    if not AI_API_KEYS:
+        raise Exception("API Key Gemini (AI_API_KEY) tidak ditemukan di Secrets!")
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.95,
+            "temperature": 0.85,
             "topP": 0.95,
-            "topK": 40
+            "maxOutputTokens": 800
         }
     }
 
-    pairs = get_gemini_pairs(key)
-    if WORKING_MODEL_PAIR and WORKING_MODEL_PAIR in pairs:
-        ordered_pairs = [WORKING_MODEL_PAIR] + [p for p in pairs if p != WORKING_MODEL_PAIR]
-    else:
-        ordered_pairs = pairs
+    # Prioritas utama: Gemini 1.5 Pro, cadangan: Gemini 1.5 Flash dan 2.0 Flash
+    models_to_try = [
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash"
+    ]
 
-    for ver, m_name in ordered_pairs:
-        url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
-        try:
-            res = requests.post(url, json=payload, timeout=20).json()
-            if "candidates" in res and res["candidates"]:
-                text_out = res["candidates"][0]["content"]["parts"][0]["text"].strip()
-                if text_out:
-                    WORKING_MODEL_PAIR = (ver, m_name)
-                    return text_out
-            elif "error" in res:
-                code = res["error"].get("code")
-                if code == 429:
-                    time.sleep(2)
-        except Exception:
-            pass
+    last_errors = []
 
-    raise Exception("Panggilan Gemini gagal atau terkena limit kuota!")
+    for key_idx, key in enumerate(AI_API_KEYS, start=1):
+        for m_name in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={key}"
+            headers = {"Content-Type": "application/json"}
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=25)
+                if res.status_code == 200:
+                    data = res.json()
+                    if "candidates" in data and data["candidates"]:
+                        text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        if text_out:
+                            return text_out
+                else:
+                    err_json = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
+                    err_msg = err_json.get("error", {}).get("message", res.text[:120])
+                    print(f"   [GEMINI DEBUG] Key #{key_idx} | {m_name} (HTTP {res.status_code}): {err_msg}")
+                    last_errors.append(f"{m_name} (HTTP {res.status_code}: {err_msg})")
+                    if res.status_code == 429:
+                        time.sleep(3)
+            except Exception as e:
+                last_errors.append(f"{m_name} Network Error: {str(e)[:100]}")
+
+    err_summary = " | ".join(last_errors[-2:]) if last_errors else "Request gagal"
+    raise Exception(f"Google API Menolak Permintaan -> {err_summary}")
 
 def parse_time_str(t_str: str) -> int:
     t_clean = str(t_str).strip()
@@ -311,7 +274,6 @@ def open_target_spreadsheet(client):
 # MODUL ANALITIK & AI ENGAGEMENT ENGINE
 # ==========================================
 def update_threads_insights(sh, accounts_map):
-    """Memperbarui metrik views, likes, replies, reposts pada baris POSTED terbaru."""
     data_ws = sh.worksheet("data")
     rows = data_ws.get_all_values()
     if len(rows) <= 1:
@@ -491,7 +453,7 @@ def decide_post_model_for_account(acc_name: str, cfg_data: dict, slot_time: str,
     return (random.uniform(0, 100) < m1_ratio)
 
 # ==========================================
-# PEMBUATAN DRAF OTOMATIS (DENGAN BATCH LIMIT ANTI-TIMEOUT)
+# PEMBUATAN DRAF OTOMATIS (DENGAN BATCH LIMIT)
 # ==========================================
 def auto_generate_today_drafts_if_needed(sh, accounts_map):
     now_dt = datetime.now(TZ)
@@ -612,7 +574,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 
     for acc_idx, acc_name in enumerate(accounts_to_generate):
         if total_generated_this_run >= MAX_DRAFTS_PER_RUN:
-            print(f"[AUTO-GEN] Batas batch ({MAX_DRAFTS_PER_RUN} draf) tercapai, sisa draf dilanjutkan di run berikutnya.")
+            print(f"[AUTO-GEN] Batas batch ({MAX_DRAFTS_PER_RUN} draf) tercapai, sisa draf dilanjutkan di siklus berikutnya.")
             break
 
         existing_cnt = account_today_counts.get(acc_name, 0)
@@ -729,7 +691,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                         acc_rows.append([today_str, slot_time, acc_name, clean_main_txt, "", aff_reply, p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
                 total_generated_this_run += 1
-                time.sleep(1)
+                time.sleep(2)
             except Exception as gen_err:
                 print(f"[AUTO-GEN SKIP] Gagal meracik 1 draf: {gen_err}")
                 break
