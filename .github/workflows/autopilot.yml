@@ -1,12 +1,12 @@
-name: Threads Autopilot Estafet Runner
+name: Threads Autopilot Runner
 
 on:
   workflow_dispatch:
 
 jobs:
-  run-worker-loop:
+  run-worker:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 10
 
     steps:
       - name: Checkout Repository
@@ -23,32 +23,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Threads Worker (6 Siklus x 20 Menit = 2 Jam)
+      - name: Run Threads Worker
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GCP_CREDS_BASE64: ${{ secrets.GCP_CREDS_BASE64 }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           PYTHONUNBUFFERED: "1"
         run: |
-          for i in 1 2 3 4 5 6; do
-            echo "===================================================="
-            echo "🚀 SIKLUS KE-$i | $(TZ='Asia/Jakarta' date '+%Y-%m-%d %H:%M:%S WIB')"
-            echo "===================================================="
-            python worker.py || echo "⚠️ Peringatan pada siklus ke-$i, lanjut..."
-            
-            if [ $i -lt 6 ]; then
-              echo "⏳ Istirahat 20 menit sebelum siklus berikutnya..."
-              sleep 1200
-            fi
-          done
-
-      - name: Auto-Trigger Sesi Estafet Berikutnya (24/7 Non-Stop)
-        if: ${{ !cancelled() }}
-        run: |
-          echo "🔄 Menyalakan workflow estafet berikutnya secara otomatis..."
-          curl -L -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/${{ github.repository }}/actions/workflows/autopilot.yml/dispatches \
-            -d '{"ref":"main"}'
+          python worker.py
