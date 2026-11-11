@@ -145,7 +145,7 @@ def _safe_float(val) -> float:
         return 0.0
 
 # ==========================================
-# GEMINI API ENGINE (DYNAMIC AUTO-DISCOVERY)
+# GEMINI API ENGINE (DIKUNCI KE GEMINI-3.8-FLASH)
 # ==========================================
 CACHED_WORKING_MODEL = None
 
@@ -169,8 +169,8 @@ def get_best_model(key: str) -> tuple:
         except Exception:
             pass
 
-    # Urutan prioritas sesuai rekomendasi resmi Google
-    preferred_order = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "flash"]
+    # gemini-3.8-flash diposisikan nomor 1 sesuai arahan resmi API Google
+    preferred_order = ["gemini-3.8-flash", "gemini-3.8-pro", "gemini-2.5-pro", "flash"]
     def rank_model(item):
         _, name = item
         for idx, pref in enumerate(preferred_order):
@@ -185,8 +185,8 @@ def get_best_model(key: str) -> tuple:
         print(f"[GEMINI DISCOVERY] Menggunakan model aktif: {CACHED_WORKING_MODEL[0]}/{CACHED_WORKING_MODEL[1]}")
         return CACHED_WORKING_MODEL
 
-    # Fallback langsung ke gemini-2.5-flash sesuai pesan API Google
-    CACHED_WORKING_MODEL = ("v1beta", "gemini-2.5-flash")
+    # Fallback langsung ke gemini-3.8-flash
+    CACHED_WORKING_MODEL = ("v1beta", "gemini-3.8-flash")
     return CACHED_WORKING_MODEL
 
 def call_gemini(prompt: str) -> str:
