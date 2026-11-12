@@ -254,10 +254,6 @@ def calculate_model_engagement_ratio(data_items, acc_filter=None):
     }
 
 def arrange_post_models(total_count: int, m1_ratio_pct: float) -> list:
-    """
-    Menjamin proporsi Model 1 (True) dan Model 2 (False) terdistribusi pasti dan selang-seling
-    saat generate pos di app.py maupun worker.py.
-    """
     if total_count <= 0:
         return []
     m1_pct = max(0.0, min(100.0, float(m1_ratio_pct)))
@@ -442,14 +438,22 @@ def update_config_keys(sh_obj, kv_pairs: dict):
     cfg_ws = sh_obj.worksheet("Config")
     all_vals = cfg_ws.get_all_values()
     existing_keys = {}
-    for row_idx, r in enumerate(all_vals, start=1):
+    for row_idx, r in enumerate(all_vals):
         if r and r[0].strip():
             existing_keys[r[0].strip()] = row_idx
     for k, v in kv_pairs.items():
         if k in existing_keys:
-            cfg_ws.update_cell(existing_keys[k], 2, str(v))
+            idx = existing_keys[k]
+            while len(all_vals[idx]) < 2:
+                all_vals[idx].append("")
+            all_vals[idx][1] = str(v)
         else:
-            cfg_ws.append_row([k, str(v)])
+            all_vals.append([k, str(v)])
+    cfg_ws.clear()
+    try:
+        cfg_ws.update(values=all_vals, value_input_option="USER_ENTERED")
+    except TypeError:
+        cfg_ws.update(all_vals)
 
 # ==============================================================================
 # GEMINI API ENGINE (FILTER TEKS MURNI GEMINI 3 + BLACKLIST OTOMATIS)
@@ -906,19 +910,24 @@ with tabs[0]:
                 st.error(f"Gagal menyimpan: {e}")
 
     st.divider()
-    st.write("#### ⚖️ Pengaturan Komposisi Model Postingan per Akun (Model 1 vs Model 2)")
-    st.caption("Tentukan format postingan per akun: **Model 1** (Link langsung di Awal/Tengah/Akhir Post Utama, kolom `reply_text` kosong) vs **Model 2** (Link di Kolom Balasan).")
+    # ==========================================================================
+    # PENGATURAN KOMPOSISI MODEL 1 & MODEL 2 (BISA LANGSUNG SEMUA AKUN)
+    # ==========================================================================
+    st.write("#### ⚖️ Pengaturan Komposisi Model Postingan (Model 1 vs Model 2)")
+    st.caption("Pilih **`-- Semua Akun (All Accounts) --`** untuk menerapkan pengaturan sekaligus ke seluruh akun, atau pilih per akun.")
 
-    acc_options_model = acc_names_all if acc_names_all else ["-- Belum ada akun --"]
+    acc_options_model = ["-- Semua Akun (All Accounts) --"] + acc_names_all if acc_names_all else ["-- Belum ada akun --"]
     sel_acc_model = st.selectbox(
-        "Pilih Akun Threads yang Ingin Diatur:",
+        "Pilih Target Akun Threads yang Ingin Diatur:",
         acc_options_model,
+        index=0,
         key="sel_acc_model_setting"
     )
 
     if sel_acc_model and sel_acc_model != "-- Belum ada akun --":
-        key_mode_acc = f"model_decision_mode_{sel_acc_model}"
-        key_m1_acc = f"model_1_ratio_{sel_acc_model}"
+        is_all_selected = (sel_acc_model == "-- Semua Akun (All Accounts) --")
+        key_mode_acc = "model_decision_mode" if is_all_selected else f"model_decision_mode_{sel_acc_model}"
+        key_m1_acc = "model_1_ratio" if is_all_selected else f"model_1_ratio_{sel_acc_model}"
 
         cur_acc_mode = cfg_data.get(key_mode_acc, cfg_data.get("model_decision_mode", "AI_DYNAMIC")).upper()
         try:
@@ -926,8 +935,9 @@ with tabs[0]:
         except Exception:
             cur_acc_m1 = 50
 
+        label_target = "Semua Akun" if is_all_selected else f"@{sel_acc_model}"
         choice_model_mode = st.radio(
-            f"Metode Penentuan Model untuk {sel_acc_model}:",
+            f"Metode Penentuan Model untuk {label_target}:",
             options=["AI_DYNAMIC", "MANUAL"],
             index=0 if cur_acc_mode == "AI_DYNAMIC" else 1,
             format_func=lambda x: "🤖 Diserahkan ke AI Self-Learning (Otomatis Seimbang & Adaptif)" if x == "AI_DYNAMIC" else "🎯 Tentukan Manual (By Percentage Slider)",
@@ -936,7 +946,7 @@ with tabs[0]:
 
         if choice_model_mode == "MANUAL":
             m1_slider_val = st.slider(
-                f"Persentase Model 1 (Direct Link) untuk {sel_acc_model}:",
+                f"Persentase Model 1 (Direct Link) untuk {label_target}:",
                 min_value=0,
                 max_value=100,
                 value=cur_acc_m1,
@@ -955,43 +965,85 @@ with tabs[0]:
             final_m1_to_save = m1_slider_val
             final_m2_to_save = m2_slider_val
         else:
-            acc_live_stats = calculate_model_engagement_ratio(all_data, acc_filter=sel_acc_model)
+            acc_filter_val = None if is_all_selected else sel_acc_model
+            acc_live_stats = calculate_model_engagement_ratio(all_data, acc_filter=acc_filter_val)
             ai_w1_pct = int(round(acc_live_stats["weight_m1"] * 100))
             ai_w2_pct = 100 - ai_w1_pct
             final_m1_to_save = ai_w1_pct
             final_m2_to_save = ai_w2_pct
             st.info(
-                f"💡 **Diserahkan ke AI Self-Learning:** Komposisi Model 1 dan Model 2 untuk akun `{sel_acc_model}` "
+                f"💡 **Diserahkan ke AI Self-Learning ({label_target}):** Komposisi Model 1 dan Model 2 "
                 f"dibagi secara otomatis dan berselang-seling pasti.\n\n"
                 f"📊 **Porsi Aktif Saat Ini:** 🔵 **Model 1: `{ai_w1_pct}%`** vs ⚪ **Model 2: `{ai_w2_pct}%`**"
             )
 
-        if st.button(f"💾 Simpan Komposisi Model ({sel_acc_model})", type="primary", key=f"btn_save_model_{sel_acc_model}"):
+        btn_save_lbl = "💾 Simpan Komposisi Model ke SEMUA AKUN Sekaligus" if is_all_selected else f"💾 Simpan Komposisi Model (@{sel_acc_model})"
+        if st.button(btn_save_lbl, type="primary", key=f"btn_save_model_{sel_acc_model}"):
             sh_obj = get_spreadsheet()
             if sh_obj:
                 try:
-                    update_config_keys(sh_obj, {
-                        f"model_decision_mode_{sel_acc_model}": choice_model_mode,
-                        f"model_1_ratio_{sel_acc_model}": str(final_m1_to_save),
-                        f"model_2_ratio_{sel_acc_model}": str(final_m2_to_save)
-                    })
+                    kv_to_update = {}
+                    if is_all_selected:
+                        kv_to_update["model_decision_mode"] = choice_model_mode
+                        kv_to_update["model_1_ratio"] = str(final_m1_to_save)
+                        kv_to_update["model_2_ratio"] = str(final_m2_to_save)
+                        for a_name in acc_names_all:
+                            kv_to_update[f"model_decision_mode_{a_name}"] = choice_model_mode
+                            kv_to_update[f"model_1_ratio_{a_name}"] = str(final_m1_to_save)
+                            kv_to_update[f"model_2_ratio_{a_name}"] = str(final_m2_to_save)
+                    else:
+                        kv_to_update[f"model_decision_mode_{sel_acc_model}"] = choice_model_mode
+                        kv_to_update[f"model_1_ratio_{sel_acc_model}"] = str(final_m1_to_save)
+                        kv_to_update[f"model_2_ratio_{sel_acc_model}"] = str(final_m2_to_save)
+
+                    update_config_keys(sh_obj, kv_to_update)
                     st.cache_data.clear()
-                    st.success(f"✅ Pengaturan komposisi model untuk {sel_acc_model} berhasil disimpan ke Google Sheets!")
+                    st.success(f"✅ Pengaturan komposisi model untuk **{label_target}** berhasil disimpan ke Google Sheets!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Gagal menyimpan ke Sheets: {e}")
 
+    if acc_names_all:
+        with st.expander("📋 Lihat Rekap Status Komposisi Model Semua Akun"):
+            rekap_rows = []
+            for a_name in acc_names_all:
+                a_mode = cfg_data.get(f"model_decision_mode_{a_name}", cfg_data.get("model_decision_mode", "AI_DYNAMIC")).upper()
+                if a_mode == "AI_DYNAMIC":
+                    st_acc = calculate_model_engagement_ratio(all_data, acc_filter=a_name)
+                    a_m1 = str(int(round(st_acc["weight_m1"] * 100)))
+                    a_m2 = str(100 - int(a_m1))
+                else:
+                    a_m1 = cfg_data.get(f"model_1_ratio_{a_name}", cfg_data.get("model_1_ratio", "50"))
+                    try:
+                        a_m2 = str(100 - int(a_m1))
+                    except:
+                        a_m2 = "50"
+                rekap_rows.append({
+                    "Akun": a_name,
+                    "Mode": "🤖 Diserahkan ke AI" if a_mode == "AI_DYNAMIC" else "🎯 Manual",
+                    "Model 1 (Direct)": f"{a_m1}%",
+                    "Model 2 (Reply)": f"{a_m2}%"
+                })
+            st.dataframe(pd.DataFrame(rekap_rows), use_container_width=True, hide_index=True)
+
     st.divider()
 
     # ==========================================================================
-    # EKSEKUSI GENERATE KONTEN AUTOPILOT (DENGAN PILIHAN LANGSUNG MODEL 1 & 2)
+    # EKSEKUSI GENERATE KONTEN AUTOPILOT (LANGSUNG SEMUA AKUN + MODEL 1 & 2)
     # ==========================================================================
-    st.write("#### ⚡ Eksekusi Cepat: Generate Konten Hari Ini (Model 1 & Model 2)")
+    st.write("#### ⚡ Eksekusi Cepat: Generate Konten Hari Ini (Langsung Semua Akun)")
 
-    col_gen_m1, col_gen_m2 = st.columns([2, 1])
+    col_gen_acc, col_gen_m1, col_gen_mode = st.columns([1.5, 2, 1.5])
+    with col_gen_acc:
+        gen_target_acc_now = st.selectbox(
+            "🎯 Pilih Akun untuk Di-Generate:",
+            ["-- Semua Akun (All Accounts) --"] + acc_names_all,
+            index=0,
+            key="gen_target_acc_now"
+        )
     with col_gen_m1:
         autopilot_gen_model_mode = st.selectbox(
-            "⚖️ Mode Pembagian Model 1 & Model 2 Saat Generate Sekarang:",
+            "⚖️ Mode Pembagian Model 1 & Model 2:",
             [
                 "🤖 Otomatis Sesuai AI Self-Learning / Setting Akun (Selang-Seling)",
                 "⚖️ Bagi Rata 50% Model 1 (Link di Post Utama) + 50% Model 2 (Link di Balasan)",
@@ -1000,8 +1052,15 @@ with tabs[0]:
             ],
             index=0
         )
-    with col_gen_m2:
-        max_batch_now = st.number_input("Jumlah Draf Dibuat per Klik:", min_value=1, max_value=50, value=min(8, max(1, sel_video + sel_text + sel_viral)))
+    with col_gen_mode:
+        gen_quota_mode = st.selectbox(
+            "📦 Mode Jumlah Draf:",
+            [
+                "🚀 Langsung Penuh Semua Kuota Harian (Semua Akun)",
+                "🛡️ Cicil Bertahap (8 Draf per Akun)"
+            ],
+            index=0
+        )
 
     total_plan = sel_video + sel_text + sel_viral
     preview_slots = generate_slots(total_plan, start_time_str=start_t.strftime("%H:%M"), end_time_str=end_t.strftime("%H:%M"))
@@ -1014,7 +1073,7 @@ with tabs[0]:
     elif "50%" in autopilot_gen_model_mode:
         preview_m1_pct = 50.0
     else:
-        sample_acc = acc_names_all[0] if (sel_auto_acc == "-- Semua Akun (All Accounts) --" and acc_names_all) else sel_auto_acc
+        sample_acc = acc_names_all[0] if (gen_target_acc_now == "-- Semua Akun (All Accounts) --" and acc_names_all) else gen_target_acc_now
         preview_m1_pct = get_account_m1_ratio_pct(sample_acc, cfg_data, all_data)
 
     preview_models = arrange_post_models(total_plan, preview_m1_pct)
@@ -1031,7 +1090,7 @@ with tabs[0]:
 
     c_btn_gen, c_btn_clean = st.columns([2, 2])
     with c_btn_gen:
-        btn_run_ap_now = st.button("🚀 Generate Konten Autopilot Sekarang", type="primary", use_container_width=True)
+        btn_run_ap_now = st.button("🚀 Generate Konten Sekarang (Semua Akun / Terpilih)", type="primary", use_container_width=True)
     with c_btn_clean:
         btn_clean_dup = st.button("🧹 Bersihkan Jadwal PENDING yang Dobel Hari Ini", use_container_width=True)
 
@@ -1053,7 +1112,6 @@ with tabs[0]:
                         r_stat = str(r[7]).strip().upper() if len(r) > 7 else ""
                         slot_k = (r_date, r_time, r_acc)
 
-                        # Baris yang sudah POSTED selalu dipertahankan
                         if r_stat == "POSTED":
                             seen_slots.add(slot_k)
                             kept_rows.append(r)
@@ -1080,7 +1138,7 @@ with tabs[0]:
         elif not acc_records:
             st.error("Daftarkan akun di tab Akun Threads terlebih dahulu.")
         else:
-            target_accounts_to_run = acc_names_all if sel_auto_acc == "-- Semua Akun (All Accounts) --" else [sel_auto_acc]
+            target_accounts_to_run = acc_names_all if gen_target_acc_now == "-- Semua Akun (All Accounts) --" else [gen_target_acc_now]
             ready_prods = [p for p in raw_prods if str(p.get("status", "")).strip().upper() == "READY"]
             prods_with_media = [p for p in ready_prods if str(p.get("media_url", "")).strip()]
             prods_text_only = [p for p in ready_prods if not str(p.get("media_url", "")).strip()] or ready_prods
@@ -1089,7 +1147,6 @@ with tabs[0]:
             data_ws = sh_obj.worksheet("data")
             existing_sheet_vals = data_ws.get_all_values()
 
-            # Cek slot yang sudah ada hari ini agar tidak pernah dobel
             existing_slot_set = set()
             acc_existing_cnt = {}
             acc_latest_min = {}
@@ -1107,20 +1164,22 @@ with tabs[0]:
                             if tm > acc_latest_min.get(ra, -1):
                                 acc_latest_min[ra] = tm
 
-            prog_bar = st.progress(0, text="Memulai pembuatan draf (Model 1 & Model 2)...")
+            is_full_mode = ("Langsung Penuh" in gen_quota_mode)
+            prog_bar = st.progress(0, text="Memulai pembuatan draf untuk akun terpilih...")
             saved_count = 0
             m1_saved = 0
             m2_saved = 0
 
+            total_accounts = len(target_accounts_to_run)
             for acc_idx, acc_target in enumerate(target_accounts_to_run):
                 acc_k = acc_target.lower()
                 cur_cnt = acc_existing_cnt.get(acc_k, 0)
                 rem_cnt = total_plan - cur_cnt
                 if rem_cnt <= 0:
-                    st.info(f"Akun @{acc_target} sudah memiliki {cur_cnt}/{total_plan} draf untuk hari ini.")
+                    st.info(f"Akun @{acc_target} sudah memiliki draf penuh ({cur_cnt}/{total_plan}) untuk hari ini.")
                     continue
 
-                batch_to_make = min(rem_cnt, int(max_batch_now))
+                batch_to_make = rem_cnt if is_full_mode else min(rem_cnt, 8)
                 end_m_val = end_t.hour * 60 + end_t.minute
                 now_m_val = now.hour * 60 + now.minute
                 cfg_start_m_val = start_t.hour * 60 + start_t.minute
@@ -1153,9 +1212,10 @@ with tabs[0]:
                     if (today_str, slot_time, acc_k) in existing_slot_set:
                         continue
 
+                    overall_pct = ((acc_idx * batch_to_make) + b_i) / max(1, total_accounts * batch_to_make)
                     prog_bar.progress(
-                        min(b_i / max(1, batch_to_make), 1.0),
-                        text=f"Meracik {b_i}/{batch_to_make} untuk @{acc_target} jam {slot_time} ({'Model 1 🔵' if direct_to_main else 'Model 2 ⚪'})..."
+                        min(overall_pct, 1.0),
+                        text=f"[{acc_idx+1}/{total_accounts}] Meracik draf {b_i}/{batch_to_make} untuk @{acc_target} jam {slot_time} ({'Model 1 🔵' if direct_to_main else 'Model 2 ⚪'})..."
                     )
                     vibe = resolve_vibe_desc(sel_ai_style_ap)
 
@@ -1186,7 +1246,7 @@ with tabs[0]:
                             m2_saved += 1
                         time_lib.sleep(2)
                     except Exception as gen_err:
-                        st.warning(f"⚠️ Berhenti pada draf ke-{b_i} (@{acc_target}): {gen_err}")
+                        st.warning(f"⚠️ Terkendala pada draf ke-{b_i} (@{acc_target}): {gen_err}")
                         break
 
                 if acc_batch_rows:
@@ -1400,7 +1460,7 @@ with tabs[2]:
                     st.error(f"Gagal menyimpan ke Sheets: {e}")
 
 # ==============================================================================
-# TAB 4: CONTENT STUDIO (MANUAL & AI - MENDUKUNG MODEL 1 & MODEL 2 + GAYA WORKER)
+# TAB 4: CONTENT STUDIO (MANUAL & AI - MENDUKUNG MODEL 1 & MODEL 2 + SEMUA AKUN)
 # ==============================================================================
 with tabs[3]:
     st.subheader("✍️ Content Studio (Pembuat Konten Manual & AI)")
