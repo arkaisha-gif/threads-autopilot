@@ -60,7 +60,7 @@ VIRAL_OBSERVATIONS = [
     "Opini santai tentang hal yang sering diromantisasi padahal aslinya melelahkan."
 ]
 
-# Variasi posisi link & CTA luwes untuk Model 1 (1 Post)
+# Variasi posisi link & CTA luwes untuk Model 1 (1 Post - Link di Main Text, Reply Kosong)
 MODEL_1_POSITION_PROMPTS = [
     (
         "POSISI LINK: AWAL KALIMAT.\n"
@@ -91,14 +91,6 @@ FALLBACK_CTA_STARTERS = [
 ]
 
 CLOSING_NARRATIVES = FALLBACK_CTA_STARTERS
-
-PROMPT_RULES_CLEAN = """
-ATURAN GAYA BAHASA THREADS INDONESIA:
-1. DILARANG pakai kata 'POV:', '[Teks Utama]', '[Teks Balasan CTA]', atau gaya iklan brosur kaku.
-2. Langsung mulai dari masalah nyata sehari-hari dengan bahasa santai, jujur, dan relate.
-3. JANGAN pakai sebutan 'keranjang kuning' atau 'link di bio'.
-4. Dilarang pakai hashtag (#), dilarang pakai tanda kutip pembungkus.
-"""
 
 def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
     if not text:
@@ -145,7 +137,7 @@ def _safe_float(val) -> float:
         return 0.0
 
 # ==============================================================================
-# MODUL AI SELF-LEARNING & DECISION ENGINE (MODEL 1 VS MODEL 2)
+# MODUL AI SELF-LEARNING & DECISION ENGINE (MODEL 1 VS MODEL 2 PASTI MUNCUL)
 # ==============================================================================
 def extract_self_learning_patterns(data_items):
     if not data_items:
@@ -203,7 +195,8 @@ def calculate_model_engagement_ratio(data_items, acc_filter=None):
         if isinstance(r, dict):
             if str(r.get("status", "")).strip().upper() != "POSTED":
                 continue
-            if acc_filter and str(r.get("account", r.get("name", ""))).strip() != str(acc_filter).strip():
+            acc_val = str(r.get("target_account", r.get("account", r.get("name", "")))).strip()
+            if acc_filter and acc_val.lower() != str(acc_filter).strip().lower():
                 continue
             v = _safe_float(r.get("views", 0))
             l = _safe_float(r.get("likes", 0))
@@ -211,14 +204,16 @@ def calculate_model_engagement_ratio(data_items, acc_filter=None):
             repst = _safe_float(r.get("reposts", 0))
             score = v + (l * 5.0) + (rep * 8.0) + (repst * 10.0)
 
-            reply_val = str(r.get("reply_chain", r.get("reply", ""))).strip()
+            reply_val = str(r.get("reply_text", r.get("reply_chain", r.get("reply", "")))).strip()
             if not reply_val or reply_val.lower() == "nan":
-                m1_scores.append(score)
+                if score > 0:
+                    m1_scores.append(score)
             else:
-                m2_scores.append(score)
+                if score > 0:
+                    m2_scores.append(score)
         elif isinstance(r, (list, tuple)):
             if len(r) >= 8 and str(r[7]).strip().upper() == "POSTED":
-                if acc_filter and len(r) > 2 and str(r[2]).strip() != str(acc_filter).strip():
+                if acc_filter and len(r) > 2 and str(r[2]).strip().lower() != str(acc_filter).strip().lower():
                     continue
                 v = _safe_float(r[12]) if len(r) > 12 else 0.0
                 l = _safe_float(r[13]) if len(r) > 13 else 0.0
@@ -228,23 +223,28 @@ def calculate_model_engagement_ratio(data_items, acc_filter=None):
 
                 reply_val = str(r[5]).strip() if len(r) > 5 else ""
                 if not reply_val or reply_val.lower() == "nan":
-                    m1_scores.append(score)
+                    if score > 0:
+                        m1_scores.append(score)
                 else:
-                    m2_scores.append(score)
+                    if score > 0:
+                        m2_scores.append(score)
 
-    if acc_filter and (len(m1_scores) + len(m2_scores)) < 3:
-        return calculate_model_engagement_ratio(data_items, acc_filter=None)
+    if len(m1_scores) < 3 or len(m2_scores) < 3:
+        avg_m1 = sum(m1_scores) / len(m1_scores) if m1_scores else 0.0
+        avg_m2 = sum(m2_scores) / len(m2_scores) if m2_scores else 0.0
+        return {
+            "avg_m1": avg_m1,
+            "avg_m2": avg_m2,
+            "weight_m1": 0.50,
+            "weight_m2": 0.50
+        }
 
-    avg_m1 = sum(m1_scores) / len(m1_scores) if m1_scores else 0.0
-    avg_m2 = sum(m2_scores) / len(m2_scores) if m2_scores else 0.0
-
-    if avg_m1 == 0 and avg_m2 == 0:
-        w_m1, w_m2 = 0.5, 0.5
-    else:
-        total = avg_m1 + avg_m2
-        raw_m1 = (avg_m1 / total) if total > 0 else 0.5
-        w_m1 = max(0.20, min(0.80, raw_m1))
-        w_m2 = 1.0 - w_m1
+    avg_m1 = sum(m1_scores) / len(m1_scores)
+    avg_m2 = sum(m2_scores) / len(m2_scores)
+    total = avg_m1 + avg_m2
+    raw_m1 = (avg_m1 / total) if total > 0 else 0.50
+    w_m1 = max(0.30, min(0.70, raw_m1))
+    w_m2 = 1.0 - w_m1
 
     return {
         "avg_m1": avg_m1,
@@ -253,33 +253,49 @@ def calculate_model_engagement_ratio(data_items, acc_filter=None):
         "weight_m2": w_m2
     }
 
-def decide_post_model_by_ai(slot_time: str, model_weights: dict) -> bool:
-    w1 = model_weights.get("weight_m1", 0.5)
-    try:
-        h = int(slot_time.split(":")[0])
-        if h in [12, 13, 19, 20, 21]:
-            w1 = max(0.15, w1 - 0.15)
-        elif h in [7, 8, 15, 16, 22]:
-            w1 = min(0.85, w1 + 0.15)
-    except Exception:
-        pass
-    return random.random() < w1
+def arrange_post_models(total_count: int, m1_ratio_pct: float) -> list:
+    """
+    Menjamin proporsi Model 1 (True) dan Model 2 (False) terdistribusi pasti dan selang-seling
+    saat generate pos di app.py maupun worker.py.
+    """
+    if total_count <= 0:
+        return []
+    m1_pct = max(0.0, min(100.0, float(m1_ratio_pct)))
+    num_m1 = int(round((m1_pct / 100.0) * total_count))
+    if m1_pct > 0 and num_m1 == 0:
+        num_m1 = 1
+    if m1_pct < 100 and num_m1 == total_count and total_count > 1:
+        num_m1 = total_count - 1
 
-def decide_post_model_for_account(acc_name: str, cfg_data: dict, slot_time: str, data_items: list, default_model_stats: dict) -> bool:
+    res = []
+    acc = 0.0
+    step = num_m1 / float(total_count)
+    for _ in range(total_count):
+        acc += step
+        if acc >= 0.5:
+            res.append(True)
+            acc -= 1.0
+        else:
+            res.append(False)
+    return res
+
+def get_account_m1_ratio_pct(acc_name: str, cfg_data: dict, data_items: list) -> float:
     mode_key = f"model_decision_mode_{acc_name}"
-    mode = cfg_data.get(mode_key, cfg_data.get("model_decision_mode", "MANUAL")).strip().upper()
+    mode = cfg_data.get(mode_key, cfg_data.get("model_decision_mode", "AI_DYNAMIC")).strip().upper()
 
     if mode == "AI_DYNAMIC":
         acc_stats = calculate_model_engagement_ratio(data_items, acc_filter=acc_name)
-        return decide_post_model_by_ai(slot_time, acc_stats)
+        return acc_stats.get("weight_m1", 0.50) * 100.0
 
     ratio_key = f"model_1_ratio_{acc_name}"
     try:
-        m1_ratio = float(cfg_data.get(ratio_key, cfg_data.get("model_1_ratio", 30)))
+        m1_ratio = float(cfg_data.get(ratio_key, cfg_data.get("model_1_ratio", 50)))
     except Exception:
-        m1_ratio = 30.0
+        m1_ratio = 50.0
 
-    return (random.uniform(0, 100) < m1_ratio)
+    if ratio_key not in cfg_data and "model_1_ratio" not in cfg_data:
+        m1_ratio = 45.0
+    return m1_ratio
 
 def extract_threads_media_id(input_str: str) -> str:
     cleaned = str(input_str).strip()
@@ -441,7 +457,6 @@ def update_config_keys(sh_obj, kv_pairs: dict):
 CACHED_MODEL_LIST = None
 DEAD_MODELS = set()
 
-# Blokir model non-teks (TTS/Audio/Image) & model lawas yang sudah ditutup Google (404)
 BLACKLIST_KEYWORDS = [
     "tts", "audio", "image", "imagen", "veo", "vision", "embedding",
     "aqa", "robotics", "computer-use", "thinking", "bisect", "learnlm",
@@ -549,12 +564,10 @@ def call_gemini_core(prompt: str) -> tuple:
                         err_msg = err_json.get("error", {}).get("message", res.text[:120])
                         last_errors.append(f"{m_cur} (HTTP {res.status_code}: {err_msg[:80]})")
 
-                        # Jika model 404 (tidak ada) atau limit: 0, langsung masukkan ke daftar hitam
                         if res.status_code == 404 or "limit: 0" in err_msg:
                             DEAD_MODELS.add(m_cur)
                             break
 
-                        # Jika 503 (High Demand) atau 429 (RPM), tunggu sebentar lalu coba lagi
                         if res.status_code in [503, 429]:
                             time_lib.sleep(3 * (attempt + 1))
                             continue
@@ -587,6 +600,7 @@ def build_post_by_worker_style(p_type: str, prod: dict, direct_to_main: bool, vi
 
     elif p_type == "video":
         if direct_to_main:
+            # MODEL 1: Link di Main Text (Awal/Tengah/Akhir), Reply Kosong
             pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
             prompt = (
                 f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
@@ -603,6 +617,7 @@ def build_post_by_worker_style(p_type: str, prod: dict, direct_to_main: bool, vi
             media_formatted = prepare_media_for_post(str(prod.get("media_url", "")).strip(), duplicate_single_video=dup_video)
             return full_main_post, media_formatted, "", prod['affiliate_link']
         else:
+            # MODEL 2: Link di Reply
             prompt = (
                 f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
                 f"Tulis postingan pengantar video untuk produk: {prod['product_name']}.\n"
@@ -736,7 +751,7 @@ tabs = st.tabs([
 # ==============================================================================
 with tabs[0]:
     st.subheader("Pengaturan Jadwal & Komposisi Harian Autopilot")
-    st.write("Atur tanggal aktif, rasio harian (**Video**, **Teks**, **Viral**), dan **gaya penulisan AI**.")
+    st.write("Atur tanggal aktif, rasio harian (**Video**, **Teks**, **Viral**), serta komposisi **Model 1 vs Model 2**.")
 
     raw_start = cfg_data.get("start_datetime", "2026-01-01 04:30")
     raw_end = cfg_data.get("end_datetime", "2026-12-31 23:45")
@@ -861,15 +876,6 @@ with tabs[0]:
     def_rep_idx = reply_mode_options.index(cur_reply_mode) if cur_reply_mode in reply_mode_options else 0
     sel_reply_mode_ap = st.selectbox("Pilih Format Balasan Utas:", reply_mode_options, index=def_rep_idx)
 
-    total_plan = sel_video + sel_text + sel_viral
-    preview_slots = generate_slots(total_plan, start_time_str=start_t.strftime("%H:%M"), end_time_str=end_t.strftime("%H:%M"))
-    preview_types = arrange_post_types_3way(sel_viral, sel_text, sel_video)
-
-    type_labels = {"viral": "Viral 🚀", "video": "Video 🎬", "text": "Teks 📝"}
-    st.caption(f"💡 **Total:** {total_plan} post/hari ({sel_video} Video, {sel_text} Teks, {sel_viral} Viral).")
-    slot_badges = [f"`{preview_slots[i]} ({type_labels.get(preview_types[i], 'Post')})`" for i in range(total_plan)]
-    st.markdown("🕒 **Distribusi Jam:** " + " ➜ ".join(slot_badges))
-
     if st.button("💾 Simpan Pengaturan Autopilot", type="primary"):
         sh_obj = get_spreadsheet()
         if sh_obj:
@@ -901,7 +907,7 @@ with tabs[0]:
 
     st.divider()
     st.write("#### ⚖️ Pengaturan Komposisi Model Postingan per Akun (Model 1 vs Model 2)")
-    st.caption("Tentukan format postingan per akun: Model 1 (Direct Link fleksibel di awal/tengah/akhir Post Utama) vs Model 2 (Link di Kolom Balasan) via persentase manual atau AI Self-Learning.")
+    st.caption("Tentukan format postingan per akun: **Model 1** (Link langsung di Awal/Tengah/Akhir Post Utama, kolom `reply_text` kosong) vs **Model 2** (Link di Kolom Balasan).")
 
     acc_options_model = acc_names_all if acc_names_all else ["-- Belum ada akun --"]
     sel_acc_model = st.selectbox(
@@ -914,17 +920,17 @@ with tabs[0]:
         key_mode_acc = f"model_decision_mode_{sel_acc_model}"
         key_m1_acc = f"model_1_ratio_{sel_acc_model}"
 
-        cur_acc_mode = cfg_data.get(key_mode_acc, cfg_data.get("model_decision_mode", "MANUAL")).upper()
+        cur_acc_mode = cfg_data.get(key_mode_acc, cfg_data.get("model_decision_mode", "AI_DYNAMIC")).upper()
         try:
-            cur_acc_m1 = int(cfg_data.get(key_m1_acc, cfg_data.get("model_1_ratio", 30)))
+            cur_acc_m1 = int(cfg_data.get(key_m1_acc, cfg_data.get("model_1_ratio", 50)))
         except Exception:
-            cur_acc_m1 = 30
+            cur_acc_m1 = 50
 
         choice_model_mode = st.radio(
             f"Metode Penentuan Model untuk {sel_acc_model}:",
-            options=["MANUAL", "AI_DYNAMIC"],
-            index=0 if cur_acc_mode == "MANUAL" else 1,
-            format_func=lambda x: "🎯 Tentukan Manual (By Percentage Slider)" if x == "MANUAL" else "🤖 Diserahkan ke AI (Otomatis Multi-Armed Bandit)",
+            options=["AI_DYNAMIC", "MANUAL"],
+            index=0 if cur_acc_mode == "AI_DYNAMIC" else 1,
+            format_func=lambda x: "🤖 Diserahkan ke AI Self-Learning (Otomatis Seimbang & Adaptif)" if x == "AI_DYNAMIC" else "🎯 Tentukan Manual (By Percentage Slider)",
             key=f"radio_mode_{sel_acc_model}"
         )
 
@@ -942,24 +948,22 @@ with tabs[0]:
 
             c_m1_box, c_m2_box = st.columns(2)
             with c_m1_box:
-                st.metric("Model 1 (Link di Post Utama)", f"{m1_slider_val}%")
+                st.metric("🔵 Model 1 (Link di Post Utama)", f"{m1_slider_val}%")
             with c_m2_box:
-                st.metric("Model 2 (Link di Kolom Balasan)", f"{m2_slider_val}%")
+                st.metric("⚪ Model 2 (Link di Kolom Balasan)", f"{m2_slider_val}%")
             st.progress(m1_slider_val / 100)
-            st.caption(f"🔵 **Model 1:** {m1_slider_val}% | ⚪ **Model 2:** {m2_slider_val}%")
             final_m1_to_save = m1_slider_val
             final_m2_to_save = m2_slider_val
         else:
             acc_live_stats = calculate_model_engagement_ratio(all_data, acc_filter=sel_acc_model)
             ai_w1_pct = int(round(acc_live_stats["weight_m1"] * 100))
             ai_w2_pct = 100 - ai_w1_pct
-            final_m1_to_save = cur_acc_m1
-            final_m2_to_save = 100 - cur_acc_m1
+            final_m1_to_save = ai_w1_pct
+            final_m2_to_save = ai_w2_pct
             st.info(
                 f"💡 **Diserahkan ke AI Self-Learning:** Komposisi Model 1 dan Model 2 untuk akun `{sel_acc_model}` "
-                f"diputuskan secara dinamis berdasarkan skor engagement riil.\n\n"
-                f"📊 **Bobot AI Saat Ini:** Model 1 (`{ai_w1_pct}%` | Avg Score: `{acc_live_stats['avg_m1']:.1f}`) vs "
-                f"Model 2 (`{ai_w2_pct}%` | Avg Score: `{acc_live_stats['avg_m2']:.1f}`)"
+                f"dibagi secara otomatis dan berselang-seling pasti.\n\n"
+                f"📊 **Porsi Aktif Saat Ini:** 🔵 **Model 1: `{ai_w1_pct}%`** vs ⚪ **Model 2: `{ai_w2_pct}%`**"
             )
 
         if st.button(f"💾 Simpan Komposisi Model ({sel_acc_model})", type="primary", key=f"btn_save_model_{sel_acc_model}"):
@@ -977,100 +981,225 @@ with tabs[0]:
                 except Exception as e:
                     st.error(f"Gagal menyimpan ke Sheets: {e}")
 
-    if acc_names_all:
-        with st.expander("📋 Lihat Rekap Status Komposisi Model Semua Akun"):
-            rekap_rows = []
-            for a_name in acc_names_all:
-                a_mode = cfg_data.get(f"model_decision_mode_{a_name}", cfg_data.get("model_decision_mode", "MANUAL")).upper()
-                if a_mode == "AI_DYNAMIC":
-                    st_acc = calculate_model_engagement_ratio(all_data, acc_filter=a_name)
-                    a_m1 = str(int(round(st_acc["weight_m1"] * 100)))
-                    a_m2 = str(100 - int(a_m1))
-                else:
-                    a_m1 = cfg_data.get(f"model_1_ratio_{a_name}", cfg_data.get("model_1_ratio", "30"))
-                    try:
-                        a_m2 = str(100 - int(a_m1))
-                    except:
-                        a_m2 = "70"
-                rekap_rows.append({
-                    "Akun": a_name,
-                    "Mode": "🤖 Diserahkan ke AI" if a_mode == "AI_DYNAMIC" else "🎯 Manual",
-                    "Model 1 (Direct)": f"{a_m1}%",
-                    "Model 2 (Reply)": f"{a_m2}%"
-                })
-            st.dataframe(pd.DataFrame(rekap_rows), use_container_width=True, hide_index=True)
-
     st.divider()
 
-    st.write("#### ⚡ Eksekusi Cepat: Generate Konten Hari Ini")
-    if st.button("🚀 Generate Konten Autopilot Sekarang"):
+    # ==========================================================================
+    # EKSEKUSI GENERATE KONTEN AUTOPILOT (DENGAN PILIHAN LANGSUNG MODEL 1 & 2)
+    # ==========================================================================
+    st.write("#### ⚡ Eksekusi Cepat: Generate Konten Hari Ini (Model 1 & Model 2)")
+
+    col_gen_m1, col_gen_m2 = st.columns([2, 1])
+    with col_gen_m1:
+        autopilot_gen_model_mode = st.selectbox(
+            "⚖️ Mode Pembagian Model 1 & Model 2 Saat Generate Sekarang:",
+            [
+                "🤖 Otomatis Sesuai AI Self-Learning / Setting Akun (Selang-Seling)",
+                "⚖️ Bagi Rata 50% Model 1 (Link di Post Utama) + 50% Model 2 (Link di Balasan)",
+                "🔵 100% Model 1 Saja (Semua Link di Awal/Tengah/Akhir Post Utama)",
+                "⚪ 100% Model 2 Saja (Semua Link di Kolom Balasan)"
+            ],
+            index=0
+        )
+    with col_gen_m2:
+        max_batch_now = st.number_input("Jumlah Draf Dibuat per Klik:", min_value=1, max_value=50, value=min(8, max(1, sel_video + sel_text + sel_viral)))
+
+    total_plan = sel_video + sel_text + sel_viral
+    preview_slots = generate_slots(total_plan, start_time_str=start_t.strftime("%H:%M"), end_time_str=end_t.strftime("%H:%M"))
+    preview_types = arrange_post_types_3way(sel_viral, sel_text, sel_video)
+
+    if "100% Model 1" in autopilot_gen_model_mode:
+        preview_m1_pct = 100.0
+    elif "100% Model 2" in autopilot_gen_model_mode:
+        preview_m1_pct = 0.0
+    elif "50%" in autopilot_gen_model_mode:
+        preview_m1_pct = 50.0
+    else:
+        sample_acc = acc_names_all[0] if (sel_auto_acc == "-- Semua Akun (All Accounts) --" and acc_names_all) else sel_auto_acc
+        preview_m1_pct = get_account_m1_ratio_pct(sample_acc, cfg_data, all_data)
+
+    preview_models = arrange_post_models(total_plan, preview_m1_pct)
+    type_labels = {"viral": "Viral 🚀", "video": "Video 🎬", "text": "Teks 📝"}
+    slot_badges = []
+    for i in range(total_plan):
+        t_lbl = type_labels.get(preview_types[i], "Post")
+        m_lbl = "M1 🔵" if preview_models[i] else "M2 ⚪"
+        if preview_types[i] == "viral":
+            slot_badges.append(f"`{preview_slots[i]} ({t_lbl})`")
+        else:
+            slot_badges.append(f"`{preview_slots[i]} ({t_lbl} | {m_lbl})`")
+    st.markdown("🕒 **Preview Distribusi Jam & Model:** " + " ➜ ".join(slot_badges))
+
+    c_btn_gen, c_btn_clean = st.columns([2, 2])
+    with c_btn_gen:
+        btn_run_ap_now = st.button("🚀 Generate Konten Autopilot Sekarang", type="primary", use_container_width=True)
+    with c_btn_clean:
+        btn_clean_dup = st.button("🧹 Bersihkan Jadwal PENDING yang Dobel Hari Ini", use_container_width=True)
+
+    if btn_clean_dup:
+        sh_obj = get_spreadsheet()
+        if sh_obj:
+            with st.spinner("Mencari dan menghapus jadwal PENDING yang dobel..."):
+                data_ws = sh_obj.worksheet("data")
+                raw_vals = data_ws.get_all_values()
+                if len(raw_vals) > 1:
+                    header_row = raw_vals[0]
+                    kept_rows = [header_row]
+                    seen_slots = set()
+                    removed_cnt = 0
+                    for r in raw_vals[1:]:
+                        r_date = str(r[0]).strip().replace("'", "") if len(r) > 0 else ""
+                        r_time = str(r[1]).strip().replace("'", "") if len(r) > 1 else ""
+                        r_acc = str(r[2]).strip().lower() if len(r) > 2 else ""
+                        r_stat = str(r[7]).strip().upper() if len(r) > 7 else ""
+                        slot_k = (r_date, r_time, r_acc)
+
+                        # Baris yang sudah POSTED selalu dipertahankan
+                        if r_stat == "POSTED":
+                            seen_slots.add(slot_k)
+                            kept_rows.append(r)
+                        else:
+                            if slot_k in seen_slots:
+                                removed_cnt += 1
+                            else:
+                                seen_slots.add(slot_k)
+                                kept_rows.append(r)
+
+                    if removed_cnt > 0:
+                        data_ws.clear()
+                        data_ws.update(kept_rows)
+                        st.cache_data.clear()
+                        st.success(f"✅ Berhasil menghapus {removed_cnt} baris jadwal dobel! Jadwal Anda sekarang bersih.")
+                        st.rerun()
+                    else:
+                        st.info("Tidak ditemukan jadwal PENDING yang dobel.")
+
+    if btn_run_ap_now:
         sh_obj = get_spreadsheet()
         if not sh_obj:
             st.error("Spreadsheet tidak tersedia.")
+        elif not acc_records:
+            st.error("Daftarkan akun di tab Akun Threads terlebih dahulu.")
         else:
-            if not acc_records:
-                st.error("Daftarkan akun di tab Akun Threads terlebih dahulu.")
-            else:
-                target_accounts_to_run = acc_names_all if sel_auto_acc == "-- Semua Akun (All Accounts) --" else [sel_auto_acc]
-                ready_prods = [p for p in raw_prods if str(p.get("status", "")).strip().upper() == "READY"]
-                prods_with_media = [p for p in ready_prods if str(p.get("media_url", "")).strip()]
-                prods_text_only = [p for p in ready_prods if not str(p.get("media_url", "")).strip()] or ready_prods
+            target_accounts_to_run = acc_names_all if sel_auto_acc == "-- Semua Akun (All Accounts) --" else [sel_auto_acc]
+            ready_prods = [p for p in raw_prods if str(p.get("status", "")).strip().upper() == "READY"]
+            prods_with_media = [p for p in ready_prods if str(p.get("media_url", "")).strip()]
+            prods_text_only = [p for p in ready_prods if not str(p.get("media_url", "")).strip()] or ready_prods
 
-                today_str = now.strftime("%Y-%m-%d")
-                data_ws = sh_obj.worksheet("data")
+            today_str = now.strftime("%Y-%m-%d")
+            data_ws = sh_obj.worksheet("data")
+            existing_sheet_vals = data_ws.get_all_values()
 
-                total_to_gen = len(target_accounts_to_run) * len(preview_slots)
-                prog_bar = st.progress(0, text="Memulai pembuatan draf dengan jeda aman Free Tier...")
-                saved_count = 0
-                step_counter = 0
+            # Cek slot yang sudah ada hari ini agar tidak pernah dobel
+            existing_slot_set = set()
+            acc_existing_cnt = {}
+            acc_latest_min = {}
+            for r in existing_sheet_vals[1:]:
+                if len(r) >= 3:
+                    rd = str(r[0]).strip().replace("'", "")
+                    rt = str(r[1]).strip().replace("'", "")
+                    ra = str(r[2]).strip().lower()
+                    if rd == today_str:
+                        existing_slot_set.add((rd, rt, ra))
+                        acc_existing_cnt[ra] = acc_existing_cnt.get(ra, 0) + 1
+                        parts = re.findall(r'\d+', rt)
+                        if len(parts) >= 2:
+                            tm = int(parts[0]) * 60 + int(parts[1])
+                            if tm > acc_latest_min.get(ra, -1):
+                                acc_latest_min[ra] = tm
 
-                for acc_target in target_accounts_to_run:
-                    acc_batch_rows = []
-                    for slot_time, p_type in zip(preview_slots, preview_types):
-                        step_counter += 1
-                        prog_bar.progress(
-                            min(step_counter / max(1, total_to_gen), 1.0),
-                            text=f"Meracik draf {step_counter}/{total_to_gen} untuk @{acc_target} ({slot_time})..."
-                        )
-                        vibe = resolve_vibe_desc(sel_ai_style_ap)
-                        direct_to_main = decide_post_model_for_account(acc_target, cfg_data, slot_time, all_data, GLOBAL_MODEL_STATS)
+            prog_bar = st.progress(0, text="Memulai pembuatan draf (Model 1 & Model 2)...")
+            saved_count = 0
+            m1_saved = 0
+            m2_saved = 0
 
-                        try:
-                            if p_type == "viral":
-                                main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
-                                    "viral", {}, direct_to_main, vibe, WINNING_CONTEXT_PROMPT, dup_video=auto_dup_video
-                                )
-                            elif p_type == "video":
-                                prod = pick_weighted_product_global(prods_with_media, ready_prods)
-                                main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
-                                    "video", prod, direct_to_main, vibe, WINNING_CONTEXT_PROMPT, dup_video=auto_dup_video
-                                )
-                            else:
-                                prod = pick_weighted_product_global(prods_text_only, ready_prods)
-                                main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
-                                    "text", prod, direct_to_main, vibe, WINNING_CONTEXT_PROMPT, dup_video=auto_dup_video
-                                )
+            for acc_idx, acc_target in enumerate(target_accounts_to_run):
+                acc_k = acc_target.lower()
+                cur_cnt = acc_existing_cnt.get(acc_k, 0)
+                rem_cnt = total_plan - cur_cnt
+                if rem_cnt <= 0:
+                    st.info(f"Akun @{acc_target} sudah memiliki {cur_cnt}/{total_plan} draf untuk hari ini.")
+                    continue
 
-                            acc_batch_rows.append([
-                                today_str, slot_time, acc_target, main_t, med_t, rep_t, lnk_t, "PENDING", "", "", "", ""
-                            ])
-                            saved_count += 1
-                            time_lib.sleep(3)
-                        except Exception as gen_err:
-                            st.warning(f"⚠️ Berhenti pada draf ke-{step_counter} (@{acc_target}): {gen_err}")
-                            break
+                batch_to_make = min(rem_cnt, int(max_batch_now))
+                end_m_val = end_t.hour * 60 + end_t.minute
+                now_m_val = now.hour * 60 + now.minute
+                cfg_start_m_val = start_t.hour * 60 + start_t.minute
+                base_m = max(now_m_val + 5, cfg_start_m_val)
 
-                    if acc_batch_rows:
-                        try:
-                            data_ws.append_rows(acc_batch_rows)
-                        except Exception:
-                            for r in acc_batch_rows:
-                                data_ws.append_row(r)
+                last_m = acc_latest_min.get(acc_k, -1)
+                if last_m > 0:
+                    gap_m = max(20, int((end_m_val - last_m) / max(1, rem_cnt)))
+                    start_m_acc = max(base_m, last_m + gap_m)
+                else:
+                    start_m_acc = base_m + (acc_idx * 2)
 
-                st.cache_data.clear()
-                if saved_count > 0:
-                    st.success(f"🎉 Berhasil menyimpan {saved_count} draf postingan ke Google Sheets!")
-                    st.rerun()
+                stagger_str = f"{min(start_m_acc, 23*60+30) // 60:02d}:{min(start_m_acc, 23*60+30) % 60:02d}"
+                rem_slots = generate_slots(rem_cnt, start_time_str=stagger_str, end_time_str=end_t.strftime("%H:%M"))[:batch_to_make]
+                rem_types = preview_types[cur_cnt : cur_cnt + batch_to_make]
+
+                if "100% Model 1" in autopilot_gen_model_mode:
+                    acc_m1_pct = 100.0
+                elif "100% Model 2" in autopilot_gen_model_mode:
+                    acc_m1_pct = 0.0
+                elif "50%" in autopilot_gen_model_mode:
+                    acc_m1_pct = 50.0
+                else:
+                    acc_m1_pct = get_account_m1_ratio_pct(acc_target, cfg_data, all_data)
+
+                rem_models = arrange_post_models(batch_to_make, acc_m1_pct)
+                acc_batch_rows = []
+
+                for b_i, (slot_time, p_type, direct_to_main) in enumerate(zip(rem_slots, rem_types, rem_models), start=1):
+                    if (today_str, slot_time, acc_k) in existing_slot_set:
+                        continue
+
+                    prog_bar.progress(
+                        min(b_i / max(1, batch_to_make), 1.0),
+                        text=f"Meracik {b_i}/{batch_to_make} untuk @{acc_target} jam {slot_time} ({'Model 1 🔵' if direct_to_main else 'Model 2 ⚪'})..."
+                    )
+                    vibe = resolve_vibe_desc(sel_ai_style_ap)
+
+                    try:
+                        if p_type == "viral":
+                            main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
+                                "viral", {}, direct_to_main, vibe, WINNING_CONTEXT_PROMPT, dup_video=auto_dup_video
+                            )
+                        elif p_type == "video":
+                            prod = pick_weighted_product_global(prods_with_media, ready_prods)
+                            main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
+                                "video", prod, direct_to_main, vibe, WINNING_CONTEXT_PROMPT, dup_video=auto_dup_video
+                            )
+                        else:
+                            prod = pick_weighted_product_global(prods_text_only, ready_prods)
+                            main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
+                                "text", prod, direct_to_main, vibe, WINNING_CONTEXT_PROMPT, dup_video=auto_dup_video
+                            )
+
+                        acc_batch_rows.append([
+                            today_str, slot_time, acc_target, main_t, med_t, rep_t, lnk_t, "PENDING", "", "", "", ""
+                        ])
+                        existing_slot_set.add((today_str, slot_time, acc_k))
+                        saved_count += 1
+                        if direct_to_main:
+                            m1_saved += 1
+                        else:
+                            m2_saved += 1
+                        time_lib.sleep(2)
+                    except Exception as gen_err:
+                        st.warning(f"⚠️ Berhenti pada draf ke-{b_i} (@{acc_target}): {gen_err}")
+                        break
+
+                if acc_batch_rows:
+                    try:
+                        data_ws.append_rows(acc_batch_rows)
+                    except Exception:
+                        for r in acc_batch_rows:
+                            data_ws.append_row(r)
+
+            st.cache_data.clear()
+            if saved_count > 0:
+                st.success(f"🎉 Berhasil menyimpan {saved_count} draf unik ({m1_saved} Model 1 🔵 & {m2_saved} Model 2 ⚪) ke Google Sheets!")
+                st.rerun()
 
 # ==============================================================================
 # TAB 2: HIJACK THREAD VIRAL
@@ -1296,6 +1425,7 @@ with tabs[3]:
         studio_model_opt = st.selectbox(
             "⚖️ Pilih Model Postingan (Model 1 vs Model 2):",
             [
+                "⚖️ Bagi Rata 50% Model 1 + 50% Model 2 (Selang-Seling)",
                 "🤖 Otomatis Sesuai Pengaturan Akun / AI Self-Learning",
                 "🔵 Model 1 Saja (Direct Link Fleksibel Awal/Tengah/Akhir di Post Utama)",
                 "⚪ Model 2 Saja (Post Utama + Link di Kolom Balasan)"
@@ -1305,13 +1435,16 @@ with tabs[3]:
         copy_styles = ["Serahkan ke AI (Acak Vibe Threads)"] + THREADS_VIBES
         studio_vibe_opt = st.selectbox("🎨 Vibe / Gaya Bahasa Threads:", copy_styles)
 
-    def resolve_studio_model(acc_name_check: str, slot_str: str) -> bool:
+    def get_studio_models_list(total_cnt: int, acc_name_check: str) -> list:
         if "Model 1 Saja" in studio_model_opt:
-            return True
+            return [True] * total_cnt
         elif "Model 2 Saja" in studio_model_opt:
-            return False
+            return [False] * total_cnt
+        elif "50%" in studio_model_opt:
+            return arrange_post_models(total_cnt, 50.0)
         check_acc = acc_names_all[0] if (acc_name_check == "-- Semua Akun (All Accounts) --" and acc_names_all) else acc_name_check
-        return decide_post_model_for_account(check_acc, cfg_data, slot_str, all_data, GLOBAL_MODEL_STATS)
+        pct = get_account_m1_ratio_pct(check_acc, cfg_data, all_data)
+        return arrange_post_models(total_cnt, pct)
 
     st.divider()
     content_mode = st.radio("Pilih Mode Konten:", ["🎯 Paket Kombinasi Harian (Video + Teks + Viral)", "🛍️ Single Product Affiliate", "🚀 Viral Booster", "✍️ Tulis Bebas Manual"], horizontal=True)
@@ -1336,13 +1469,13 @@ with tabs[3]:
                 with st.spinner(f"Meracik {tot_combo} postingan dengan gaya worker.py (Model 1 & 2)..."):
                     base_dt = datetime.combine(schedule_d, schedule_t)
                     post_types = arrange_post_types_3way(cb_viral, cb_text, cb_video)
+                    studio_models = get_studio_models_list(tot_combo, target_account)
                     gen_list = []
 
-                    for idx_c, p_t in enumerate(post_types):
+                    for idx_c, (p_t, direct_to_main) in enumerate(zip(post_types, studio_models)):
                         p_dt = base_dt + timedelta(minutes=idx_c * interval_mins)
                         slot_str = p_dt.strftime("%H:%M")
                         vibe_cur = resolve_vibe_desc(studio_vibe_opt)
-                        direct_to_main = resolve_studio_model(target_account, slot_str)
 
                         if p_t == "viral":
                             main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
@@ -1384,7 +1517,7 @@ with tabs[3]:
             p_cur = pick_weighted_product_global(all_ready_p, all_ready_p) if sel_sp == "-- Acak Berbobot AI (Winning Products) --" else next((p for p in all_ready_p if p["product_name"] == sel_sp), all_ready_p[0])
             slot_str = schedule_t.strftime("%H:%M")
             vibe_cur = resolve_vibe_desc(studio_vibe_opt)
-            direct_to_main = resolve_studio_model(target_account, slot_str)
+            direct_to_main = get_studio_models_list(1, target_account)[0]
             has_media = bool(str(p_cur.get("media_url", "")).strip())
 
             main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
@@ -1400,7 +1533,7 @@ with tabs[3]:
                 "reply": rep_t,
                 "link": lnk_t
             }]
-            st.success(f"🎉 Draf berhasil dibuat ({'Model 1 - Direct Link' if direct_to_main else 'Model 2 - Reply Link'})!")
+            st.success(f"🎉 Draf berhasil dibuat ({'Model 1 🔵 - Direct Link' if direct_to_main else 'Model 2 ⚪ - Reply Link'})!")
 
     elif content_mode == "🚀 Viral Booster":
         vb_topic = st.text_input("Topik (Kosongkan jika ingin acak otomatis sesuai VIRAL_OBSERVATIONS):", placeholder="Misal: Observasi kebiasaan orang Indonesia sehari-hari")
@@ -1452,7 +1585,7 @@ with tabs[3]:
         st.write("#### 📝 Preview Antrean Draf")
         for idx_p, p_item in enumerate(posts_to_show):
             with st.container():
-                model_badge = "🔵 Model 1 (Direct)" if (p_item.get("link") and not p_item.get("reply")) else ("⚪ Model 2 (Reply)" if p_item.get("reply") else "🚀 Viral")
+                model_badge = "🔵 Model 1 (Direct Link di Post Utama)" if (p_item.get("link") and not p_item.get("reply")) else ("⚪ Model 2 (Link di Balasan)" if p_item.get("reply") else "🚀 Viral")
                 st.markdown(f"**📌 Post #{idx_p + 1} | `{p_item['date']} {p_item['time']}` | Target: `{p_item['account']}` | {model_badge}**")
                 col_box1, col_box2 = st.columns(2)
                 with col_box1:
