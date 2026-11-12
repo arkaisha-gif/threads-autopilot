@@ -71,7 +71,6 @@ VIRAL_OBSERVATIONS = [
     "Opini santai tentang hal yang sering diromantisasi padahal aslinya melelahkan."
 ]
 
-# Variasi posisi link & CTA luwes untuk Model 1 (1 Post)
 MODEL_1_POSITION_PROMPTS = [
     (
         "POSISI LINK: AWAL KALIMAT.\n"
@@ -145,16 +144,33 @@ def _safe_float(val) -> float:
         return 0.0
 
 # ==========================================
-# GEMINI API ENGINE (DIKUNCI KE GEMINI-3.8-FLASH)
+# GEMINI API ENGINE (FILTER TEKS MURNI GEMINI 3 + BLACKLIST OTOMATIS)
 # ==========================================
-CACHED_WORKING_MODEL = None
+CACHED_MODEL_LIST = None
+DEAD_MODELS = set()
 
-def get_best_model(key: str) -> tuple:
-    global CACHED_WORKING_MODEL
-    if CACHED_WORKING_MODEL:
-        return CACHED_WORKING_MODEL
+BLACKLIST_KEYWORDS = [
+    "tts", "audio", "image", "imagen", "veo", "vision", "embedding",
+    "aqa", "robotics", "computer-use", "thinking", "bisect", "learnlm",
+    "1.5", "2.0", "2.5-flash", "2.5-pro"
+]
+
+def is_valid_text_model(name: str) -> bool:
+    n = name.lower()
+    if not (n.startswith("gemini-3") or n.startswith("gemma-3")):
+        return False
+    for bad in BLACKLIST_KEYWORDS:
+        if bad in n:
+            return False
+    return True
+
+def get_available_models(key: str) -> list:
+    global CACHED_MODEL_LIST
+    if CACHED_MODEL_LIST:
+        return [m for m in CACHED_MODEL_LIST if m[1] not in DEAD_MODELS]
 
     available = []
+    seen = set()
     for ver in ["v1beta", "v1"]:
         url = f"https://generativelanguage.googleapis.com/{ver}/models?key={key}"
         try:
@@ -165,29 +181,45 @@ def get_best_model(key: str) -> tuple:
                     methods = m.get("supportedGenerationMethods", [])
                     if "generateContent" in methods:
                         clean_name = m["name"].replace("models/", "")
-                        available.append((ver, clean_name))
+                        if is_valid_text_model(clean_name) and (ver, clean_name) not in seen:
+                            seen.add((ver, clean_name))
+                            available.append((ver, clean_name))
         except Exception:
             pass
 
-    # gemini-3.8-flash diposisikan nomor 1 sesuai arahan resmi API Google
-    preferred_order = ["gemini-3.8-flash", "gemini-3.8-pro", "gemini-2.5-pro", "flash"]
+    preferred_order = [
+        "gemini-3.8-flash",
+        "gemini-3.0-flash",
+        "gemini-3-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3.1-pro",
+        "gemini-3.8-pro",
+        "gemini-3.0-pro",
+        "gemini-3",
+        "gemma-3-27b-it",
+        "gemma-3"
+    ]
     def rank_model(item):
         _, name = item
+        n_low = name.lower()
         for idx, pref in enumerate(preferred_order):
-            if pref in name.lower():
+            if pref in n_low:
                 return idx
         return 99
 
     available.sort(key=rank_model)
 
-    if available:
-        CACHED_WORKING_MODEL = available[0]
-        print(f"[GEMINI DISCOVERY] Menggunakan model aktif: {CACHED_WORKING_MODEL[0]}/{CACHED_WORKING_MODEL[1]}")
-        return CACHED_WORKING_MODEL
+    if not available:
+        available = [
+            ("v1beta", "gemini-3.8-flash"),
+            ("v1beta", "gemini-3.1-pro-preview"),
+            ("v1beta", "gemini-3.0-flash"),
+            ("v1beta", "gemma-3-27b-it")
+        ]
 
-    # Fallback langsung ke gemini-3.8-flash
-    CACHED_WORKING_MODEL = ("v1beta", "gemini-3.8-flash")
-    return CACHED_WORKING_MODEL
+    CACHED_MODEL_LIST = available
+    print(f"[GEMINI DISCOVERY] Model teks aktif: {[m[1] for m in CACHED_MODEL_LIST]}")
+    return [m for m in CACHED_MODEL_LIST if m[1] not in DEAD_MODELS]
 
 def call_gemini(prompt: str) -> str:
     if not AI_API_KEYS:
@@ -205,26 +237,39 @@ def call_gemini(prompt: str) -> str:
     last_errors = []
 
     for key_idx, key in enumerate(AI_API_KEYS, start=1):
-        ver, m_name = get_best_model(key)
-        url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
-        headers = {"Content-Type": "application/json"}
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=25)
-            if res.status_code == 200:
-                data = res.json()
-                if "candidates" in data and data["candidates"]:
-                    text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    if text_out:
-                        return text_out
-            else:
-                err_json = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
-                err_msg = err_json.get("error", {}).get("message", res.text[:120])
-                print(f"   [GEMINI DEBUG] Key #{key_idx} | {m_name} (HTTP {res.status_code}): {err_msg}")
-                last_errors.append(f"{m_name} (HTTP {res.status_code}: {err_msg})")
-                if res.status_code == 429:
-                    time.sleep(3)
-        except Exception as e:
-            last_errors.append(f"{m_name} Network Error: {str(e)[:100]}")
+        models_list = get_available_models(key)
+        for ver, m_name in models_list:
+            if m_name in DEAD_MODELS:
+                continue
+            url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
+            headers = {"Content-Type": "application/json"}
+
+            for attempt in range(2):
+                try:
+                    res = requests.post(url, headers=headers, json=payload, timeout=25)
+                    if res.status_code == 200:
+                        data = res.json()
+                        if "candidates" in data and data["candidates"]:
+                            text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                            if text_out:
+                                return text_out
+                    else:
+                        err_json = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
+                        err_msg = err_json.get("error", {}).get("message", res.text[:120])
+                        print(f"   [GEMINI DEBUG] Key #{key_idx} | {m_name} (HTTP {res.status_code}): {err_msg[:90]}")
+                        last_errors.append(f"{m_name} (HTTP {res.status_code}: {err_msg[:80]})")
+
+                        if res.status_code == 404 or "limit: 0" in err_msg:
+                            DEAD_MODELS.add(m_name)
+                            break
+
+                        if res.status_code in [503, 429]:
+                            time.sleep(3 * (attempt + 1))
+                            continue
+                        break
+                except Exception as e:
+                    last_errors.append(f"{m_name} Network Error: {str(e)[:80]}")
+                    time.sleep(1)
 
     err_summary = " | ".join(last_errors[-2:]) if last_errors else "Request gagal"
     raise Exception(f"Google API Menolak Permintaan -> {err_summary}")
@@ -726,7 +771,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                         acc_rows.append([today_str, slot_time, acc_name, clean_main_txt, "", aff_reply, p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
                 total_generated_this_run += 1
-                time.sleep(2)
+                time.sleep(3)
             except Exception as gen_err:
                 print(f"[AUTO-GEN SKIP] Gagal meracik 1 draf: {gen_err}")
                 break
