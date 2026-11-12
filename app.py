@@ -154,7 +154,6 @@ def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
     return t
 
 def format_model_1_text(raw_text: str, aff_link: str) -> str:
-    """Menyematkan tautan affiliate ke posisi placeholder (awal/tengah/akhir) secara luwes."""
     pattern = r'\[\s*(?:LINK_PRODUK|LINK|LINK PRODUK)\s*\]'
     if re.search(pattern, raw_text, flags=re.IGNORECASE):
         raw_text = re.sub(pattern, aff_link, raw_text, flags=re.IGNORECASE)
@@ -505,16 +504,17 @@ def update_config_keys(sh_obj, kv_pairs: dict):
             cfg_ws.append_row([k, str(v)])
 
 # ==============================================================================
-# GEMINI API ENGINE (DIKUNCI KE GEMINI-3.8-FLASH SINKRON DENGAN WORKER.PY)
+# GEMINI API ENGINE (MULTI-MODEL DISCOVERY + ANTI-503 RETRY & FALLBACK)
 # ==============================================================================
-CACHED_WORKING_MODEL = None
+CACHED_MODEL_LIST = None
 
-def get_best_model(key: str) -> tuple:
-    global CACHED_WORKING_MODEL
-    if CACHED_WORKING_MODEL:
-        return CACHED_WORKING_MODEL
+def get_available_models(key: str) -> list:
+    global CACHED_MODEL_LIST
+    if CACHED_MODEL_LIST:
+        return CACHED_MODEL_LIST
 
     available = []
+    seen = set()
     for ver in ["v1beta", "v1"]:
         url = f"https://generativelanguage.googleapis.com/{ver}/models?key={key}"
         try:
@@ -525,26 +525,41 @@ def get_best_model(key: str) -> tuple:
                     methods = m.get("supportedGenerationMethods", [])
                     if "generateContent" in methods:
                         clean_name = m["name"].replace("models/", "")
-                        available.append((ver, clean_name))
+                        if (ver, clean_name) not in seen:
+                            seen.add((ver, clean_name))
+                            available.append((ver, clean_name))
         except Exception:
             pass
 
-    preferred_order = ["gemini-3.8-flash", "gemini-3.8-pro", "gemini-2.5-pro", "flash"]
+    preferred_order = [
+        "gemini-3.0-flash",
+        "gemini-3-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
+        "flash-lite",
+        "flash",
+        "pro"
+    ]
     def rank_model(item):
         _, name = item
+        n_low = name.lower()
         for idx, pref in enumerate(preferred_order):
-            if pref in name.lower():
+            if pref in n_low:
                 return idx
         return 99
 
     available.sort(key=rank_model)
 
     if available:
-        CACHED_WORKING_MODEL = available[0]
-        return CACHED_WORKING_MODEL
+        CACHED_MODEL_LIST = available[:6]
+        return CACHED_MODEL_LIST
 
-    CACHED_WORKING_MODEL = ("v1beta", "gemini-3.8-flash")
-    return CACHED_WORKING_MODEL
+    CACHED_MODEL_LIST = [
+        ("v1beta", "gemini-3.0-flash"),
+        ("v1beta", "gemini-3.0-pro"),
+        ("v1beta", "gemini-2.5-flash-lite")
+    ]
+    return CACHED_MODEL_LIST
 
 def call_gemini_core(prompt: str) -> tuple:
     if not AI_API_KEYS:
@@ -561,31 +576,35 @@ def call_gemini_core(prompt: str) -> tuple:
 
     last_errors = []
     for key in AI_API_KEYS:
-        ver, m_name = get_best_model(key)
-        candidates_to_try = [(ver, m_name), ("v1beta", "gemini-3.8-flash")]
-        seen = set()
+        candidates_to_try = get_available_models(key)
         for v_cur, m_cur in candidates_to_try:
-            if (v_cur, m_cur) in seen:
-                continue
-            seen.add((v_cur, m_cur))
             url = f"https://generativelanguage.googleapis.com/{v_cur}/models/{m_cur}:generateContent?key={key}"
             headers = {"Content-Type": "application/json"}
-            try:
-                res = requests.post(url, headers=headers, json=payload, timeout=25)
-                if res.status_code == 200:
-                    data = res.json()
-                    if "candidates" in data and data["candidates"]:
-                        text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                        if text_out:
-                            return text_out, f"{v_cur}/{m_cur}"
-                else:
-                    err_json = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
-                    err_msg = err_json.get("error", {}).get("message", res.text[:120])
-                    last_errors.append(f"{m_cur} (HTTP {res.status_code}: {err_msg})")
-                    if res.status_code == 429:
-                        time_lib.sleep(2)
-            except Exception as e:
-                last_errors.append(f"{m_cur} Network Error: {str(e)[:100]}")
+
+            # Retry otomatis hingga 2x per model jika server sedang padat (HTTP 503 / 429)
+            for attempt in range(2):
+                try:
+                    res = requests.post(url, headers=headers, json=payload, timeout=25)
+                    if res.status_code == 200:
+                        data = res.json()
+                        if "candidates" in data and data["candidates"]:
+                            text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                            if text_out:
+                                return text_out, f"{v_cur}/{m_cur}"
+                    elif res.status_code in [503, 429]:
+                        err_json = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
+                        err_msg = err_json.get("error", {}).get("message", res.text[:100])
+                        last_errors.append(f"{m_cur} (HTTP {res.status_code}: {err_msg})")
+                        time_lib.sleep(2 * (attempt + 1))
+                        continue
+                    else:
+                        err_json = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
+                        err_msg = err_json.get("error", {}).get("message", res.text[:100])
+                        last_errors.append(f"{m_cur} (HTTP {res.status_code}: {err_msg})")
+                        break
+                except Exception as e:
+                    last_errors.append(f"{m_cur} Network Error: {str(e)[:80]}")
+                    time_lib.sleep(1)
 
     err_summary = " | ".join(last_errors[-2:]) if last_errors else "Request gagal"
     raise Exception(f"Google API Menolak Permintaan -> {err_summary}")
@@ -598,10 +617,6 @@ def call_gemini(prompt: str) -> str:
 # HELPER PEMBUAT KONTEN (SINKRON DENGAN GAYA POSTING WORKER.PY)
 # ==============================================================================
 def build_post_by_worker_style(p_type: str, prod: dict, direct_to_main: bool, vibe: str, winning_context_prompt: str, dup_video: bool = True) -> tuple:
-    """
-    Meracik (main_text, media_formatted, reply_chain_str, affiliate_link)
-    menggunakan gaya bahasa & struktur prompt yang identik dengan worker.py terakhir.
-    """
     if p_type == "viral":
         topik = random.choice(VIRAL_OBSERVATIONS)
         prompt_v = (
