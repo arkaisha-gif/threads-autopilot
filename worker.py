@@ -15,9 +15,9 @@ load_dotenv()
 
 TZ = pytz.timezone("Asia/Jakarta")
 
-# Batas aman per eksekusi agar worker selesai < 4 menit
-MAX_DRAFTS_PER_RUN = 8
-MAX_PUBLISH_PER_RUN = 3
+# Karena jam 1-3 pagi belum ada jadwal publish, kapasitas buat draf dinaikkan agar tuntas sebelum jam 4 pagi
+MAX_DRAFTS_PER_RUN = 16
+MAX_PUBLISH_PER_RUN = 4
 MAX_INSIGHTS_PER_RUN = 15
 
 # ==========================================
@@ -317,10 +317,6 @@ def arrange_post_types_3way(num_viral: int, num_text: int, num_video: int) -> li
     return res[:total]
 
 def arrange_post_models(total_count: int, m1_ratio_pct: float) -> list:
-    """
-    Membagi proporsi Model 1 (True = Link di Post Utama) dan Model 2 (False = Link di Balasan)
-    secara pasti & berselang-seling merata (Interleaved), bukan sekadar tebakan acak yang bisa meleset.
-    """
     if total_count <= 0:
         return []
     m1_pct = max(0.0, min(100.0, float(m1_ratio_pct)))
@@ -510,7 +506,6 @@ def calculate_model_engagement_ratio(rows, acc_filter=None):
             except Exception:
                 pass
 
-    # Fase eksplorasi seimbang (50:50) jika sampel Model 1 belum cukup banyak
     if len(m1_scores) < 3 or len(m2_scores) < 3:
         avg_m1 = sum(m1_scores) / len(m1_scores) if m1_scores else 0.0
         avg_m2 = sum(m2_scores) / len(m2_scores) if m2_scores else 0.0
@@ -549,17 +544,21 @@ def get_account_m1_ratio_pct(acc_name: str, cfg_data: dict, rows: list) -> float
     except Exception:
         m1_ratio = 50.0
 
-    # Jika di Config tidak sengaja tertulis 0 padahal mode manual default, beri default 40% agar Model 1 tetap jalan
     if ratio_key not in cfg_data and "model_1_ratio" not in cfg_data:
         m1_ratio = 45.0
     return m1_ratio
 
 # ==========================================
-# PEMBUATAN DRAF OTOMATIS (ANTI-DOBEL & INTERLEAVED MODEL 1 & 2)
+# PEMBUATAN DRAF OTOMATIS (KHUSUS JAM 01:00 - 03:59 PAGI WIB)
 # ==========================================
 def auto_generate_today_drafts_if_needed(sh, accounts_map):
     now_dt = datetime.now(TZ)
     today_str = now_dt.strftime("%Y-%m-%d")
+
+    # KUNCI WAKTU: Hanya meracik draf pada rentang jam 01:00 s/d 03:59 Pagi WIB
+    if not (1 <= now_dt.hour < 4):
+        print(f"[AUTO-GEN] Waktu sekarang {now_dt.strftime('%H:%M')} WIB (Di luar jam 01:00-03:59 pagi). Mode fokus publish Sheet -> Threads.")
+        return
 
     data_ws = sh.worksheet("data")
     existing_rows = data_ws.get_all_values()
@@ -609,9 +608,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
             f"(Tirulah ritme santainya tanpa menyalin kata per kata)\n"
         )
 
-    # Hitung progres & catat jam terakhir yang sudah ada di Sheet hari ini per akun (Anti-Dobel)
     account_today_counts = {}
-    account_latest_minute = {}
     existing_slot_keys = set()
 
     if len(existing_rows) > 1:
@@ -624,9 +621,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                     acc_key = r_acc.lower()
                     account_today_counts[acc_key] = account_today_counts.get(acc_key, 0) + 1
                     existing_slot_keys.add((today_str, r_time, acc_key))
-                    t_min = parse_time_str(r_time)
-                    if t_min > account_latest_minute.get(acc_key, -1):
-                        account_latest_minute[acc_key] = t_min
 
     target_cfg_acc = cfg_data.get("target_autopilot_account", "-- Semua Akun (All Accounts) --").strip()
     if target_cfg_acc != "-- Semua Akun (All Accounts) --" and target_cfg_acc in active_accounts:
@@ -644,20 +638,8 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         return
 
     cfg_start_clock = cfg_data.get("start_time", "04:30")
-    now_minutes = now_dt.hour * 60 + now_dt.minute
     cfg_start_minutes = parse_time_str(cfg_start_clock)
-
-    if now_minutes > 23 * 60 + 20:
-        print("[AUTO-GEN] Waktu sudah melewati 23:20 WIB, pembuatan draf ditunda ke pergantian hari.")
-        return
-
-    if now_minutes > cfg_start_minutes:
-        base_start_m = now_minutes + 5
-    else:
-        base_start_m = cfg_start_minutes
-
     end_clock = cfg_data.get("end_time", "23:45")
-    end_m_limit = parse_time_str(end_clock)
 
     prod_ws = sh.worksheet("Products")
     all_prods = prod_ws.get_all_records()
@@ -691,7 +673,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 
     for acc_idx, acc_name in enumerate(accounts_to_generate):
         if total_generated_this_run >= MAX_DRAFTS_PER_RUN:
-            print(f"[AUTO-GEN] Batas batch ({MAX_DRAFTS_PER_RUN} draf) tercapai, sisa draf dilanjutkan di siklus berikutnya.")
+            print(f"[AUTO-GEN] Batas batch ({MAX_DRAFTS_PER_RUN} draf) tercapai, sisa draf dilanjutkan pada siklus jam 1-3 pagi berikutnya.")
             break
 
         acc_key = acc_name.lower()
@@ -700,30 +682,20 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         if rem_count <= 0:
             continue
 
-        # Jika sudah ada jadwal hari ini (misal sampai 14:20), batch berikutnya WAJIB mulai setelah jam terakhir tersebut!
-        last_sched_m = account_latest_minute.get(acc_key, -1)
-        if last_sched_m > 0:
-            est_gap = max(20, int((end_m_limit - last_sched_m) / max(1, rem_count)))
-            acc_start_m = max(base_start_m + (acc_idx * 2), last_sched_m + est_gap)
-        else:
-            acc_start_m = base_start_m + (acc_idx * 2)
-
-        if acc_start_m >= end_m_limit:
-            print(f"[AUTO-GEN] Slot jam hari ini untuk @{acc_name} sudah mencapai batas akhir ({end_clock}).")
-            continue
-
+        # Buat daftar jam utuh 1 hari (misal 04:30 s/d 23:45), lalu ambil mulai indeks ke-existing_cnt agar tidak pernah dobel
+        acc_start_m = cfg_start_minutes + (acc_idx * 2)
         staggered_start = f"{acc_start_m // 60:02d}:{acc_start_m % 60:02d}"
-        batch_rem = min(rem_count, MAX_DRAFTS_PER_RUN - total_generated_this_run)
+        full_day_slots = generate_slots(posts_per_account, start_time_str=staggered_start, end_time_str=end_clock)
 
         m1_pct = get_account_m1_ratio_pct(acc_name, cfg_data, existing_rows)
         full_models_template = arrange_post_models(posts_per_account, m1_pct)
 
-        all_rem_slots = generate_slots(rem_count, start_time_str=staggered_start, end_time_str=end_clock)
-        slots = all_rem_slots[:batch_rem]
+        batch_rem = min(rem_count, MAX_DRAFTS_PER_RUN - total_generated_this_run)
+        slots = full_day_slots[existing_cnt : existing_cnt + batch_rem]
         types_list = full_types_template[existing_cnt : existing_cnt + batch_rem]
         models_list = full_models_template[existing_cnt : existing_cnt + batch_rem]
 
-        print(f"[AUTO-GEN] Meracik {batch_rem} post untuk @{acc_name} mulai jam {staggered_start} (Progress: {existing_cnt}/{posts_per_account} | Target Model 1: {m1_pct:.0f}%)...")
+        print(f"[AUTO-GEN 01-03 AM] Meracik {batch_rem} post untuk @{acc_name} (Progress: {existing_cnt}/{posts_per_account} | Target Model 1: {m1_pct:.0f}%)...")
 
         acc_rows = []
         for slot_time, p_type, direct_to_main in zip(slots, types_list, models_list):
@@ -835,7 +807,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                 break
 
         if acc_rows:
-            # Cek ulang data terbaru di Sheet tepat sebelum menulis agar jika ada 2 proses jalan bersamaan tidak dobel
             fresh_rows = data_ws.get_all_values()
             fresh_keys = set()
             for fr in fresh_rows[1:]:
@@ -955,7 +926,7 @@ def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: 
     raise Exception("Gagal publish ke Threads")
 
 # ==========================================
-# RUNNER UTAMA (DENGAN PENJAGA ANTI-DOBEL PUBLISH)
+# RUNNER UTAMA (TIAP 30 MENIT)
 # ==========================================
 def run_worker():
     print(f"[{datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')} WIB] Memeriksa jadwal antrean...")
@@ -977,17 +948,18 @@ def run_worker():
     except Exception as e:
         print(f"[INSIGHTS WARN] {e}")
 
+    # Create Post otomatis HANYA jalan jika waktu antara jam 01:00 - 03:59 Pagi WIB
     try:
         auto_generate_today_drafts_if_needed(sh, accounts_map)
     except Exception as e:
         print(f"[AUTO-GEN ERROR] {e}")
 
+    # Publish dari Sheet ke Threads jalan setiap siklus (tiap 30 menit)
     data_ws = sh.worksheet("data")
     rows = data_ws.get_all_values()
     if len(rows) <= 1:
         return
 
-    # Catat slot (date, time, account) yang SUDAH POSTED agar jika ada baris kembar di Sheet, tidak diposting 2x
     already_posted_slots = set()
     for r in rows[1:]:
         if len(r) >= 8 and str(r[7]).strip().upper() == "POSTED":
@@ -1002,7 +974,7 @@ def run_worker():
 
     for idx, r in enumerate(rows[1:], start=2):
         if published_this_run >= MAX_PUBLISH_PER_RUN:
-            print(f"[RUNNER] Mencapai batas {MAX_PUBLISH_PER_RUN} postingan per eksekusi. Antrean berikutnya akan diproses pada jadwal selanjutnya.")
+            print(f"[RUNNER] Mencapai batas {MAX_PUBLISH_PER_RUN} postingan per eksekusi 30 menit. Antrean berikutnya diproses pada jadwal selanjutnya.")
             break
 
         while len(r) < 12:
