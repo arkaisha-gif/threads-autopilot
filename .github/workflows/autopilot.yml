@@ -2,22 +2,22 @@ name: Threads Autopilot Runner
 
 on:
   schedule:
-    # Sabuk pengaman 1: Cron bawaan GitHub setiap 20 menit
-    - cron: '*/20 * * * *'
-  workflow_dispatch: # Sabuk pengaman 2: Pemicu otomatis estafet & manual
+    # Berjalan otomatis setiap 30 menit
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
 
 permissions:
   actions: write
   contents: read
 
 concurrency:
-  group: threads-autopilot-single-group
+  group: threads-autopilot-30m
   cancel-in-progress: false
 
 jobs:
   run-worker:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 38
 
     steps:
       - name: Checkout Repository
@@ -34,7 +34,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Threads Worker (Cepat 1-2 Menit)
+      - name: Run Threads Worker
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GCP_CREDS_BASE64: ${{ secrets.GCP_CREDS_BASE64 }}
@@ -43,14 +43,14 @@ jobs:
         run: |
           python worker.py
 
-      - name: Auto-Trigger Run Berikutnya (Jeda 15 Menit)
+      - name: Auto-Trigger Siklus Berikutnya (30 Menit)
         if: always()
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           DEFAULT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Worker selesai! Menunggu 15 menit sebelum memicu siklus berikutnya..."
-          sleep 900
+          echo "Tugas selesai. Menunggu 30 menit untuk siklus berikutnya..."
+          sleep 1800
           TOKEN="${GH_PAT:-$DEFAULT_TOKEN}"
           curl -s -X POST \
             -H "Accept: application/vnd.github+json" \
@@ -58,4 +58,4 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/autopilot.yml/dispatches" \
             -d '{"ref":"main"}'
-          echo "Siklus berikutnya berhasil dipicu otomatis!"
+          echo "Siklus 30 menit berikutnya berhasil dipicu!"
