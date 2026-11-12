@@ -71,6 +71,7 @@ VIRAL_OBSERVATIONS = [
     "Opini santai tentang hal yang sering diromantisasi padahal aslinya melelahkan."
 ]
 
+# Variasi posisi link & CTA luwes untuk Model 1 (1 Post - Tanpa Reply)
 MODEL_1_POSITION_PROMPTS = [
     (
         "POSISI LINK: AWAL KALIMAT.\n"
@@ -315,6 +316,32 @@ def arrange_post_types_3way(num_viral: int, num_text: int, num_video: int) -> li
                 res.append(b.pop(0))
     return res[:total]
 
+def arrange_post_models(total_count: int, m1_ratio_pct: float) -> list:
+    """
+    Membagi proporsi Model 1 (True = Link di Post Utama) dan Model 2 (False = Link di Balasan)
+    secara pasti & berselang-seling merata (Interleaved), bukan sekadar tebakan acak yang bisa meleset.
+    """
+    if total_count <= 0:
+        return []
+    m1_pct = max(0.0, min(100.0, float(m1_ratio_pct)))
+    num_m1 = int(round((m1_pct / 100.0) * total_count))
+    if m1_pct > 0 and num_m1 == 0:
+        num_m1 = 1
+    if m1_pct < 100 and num_m1 == total_count and total_count > 1:
+        num_m1 = total_count - 1
+
+    res = []
+    acc = 0.0
+    step = num_m1 / float(total_count)
+    for _ in range(total_count):
+        acc += step
+        if acc >= 0.5:
+            res.append(True)
+            acc -= 1.0
+        else:
+            res.append(False)
+    return res
+
 def prepare_media_for_post(media_raw: str, duplicate_single_video: bool = True) -> str:
     if not media_raw:
         return ""
@@ -464,7 +491,7 @@ def calculate_model_engagement_ratio(rows, acc_filter=None):
 
     for r in rows[1:]:
         if len(r) >= 8 and str(r[7]).strip().upper() == "POSTED":
-            if acc_filter and len(r) > 2 and str(r[2]).strip() != str(acc_filter).strip():
+            if acc_filter and len(r) > 2 and str(r[2]).strip().lower() != str(acc_filter).strip().lower():
                 continue
             try:
                 v = _safe_float(r[12]) if len(r) > 12 else 0.0
@@ -475,25 +502,31 @@ def calculate_model_engagement_ratio(rows, acc_filter=None):
 
                 reply_val = str(r[5]).strip() if len(r) > 5 else ""
                 if not reply_val or reply_val.lower() == "nan":
-                    m1_scores.append(score)
+                    if score > 0:
+                        m1_scores.append(score)
                 else:
-                    m2_scores.append(score)
+                    if score > 0:
+                        m2_scores.append(score)
             except Exception:
                 pass
 
-    if acc_filter and (len(m1_scores) + len(m2_scores)) < 3:
-        return calculate_model_engagement_ratio(rows, acc_filter=None)
+    # Fase eksplorasi seimbang (50:50) jika sampel Model 1 belum cukup banyak
+    if len(m1_scores) < 3 or len(m2_scores) < 3:
+        avg_m1 = sum(m1_scores) / len(m1_scores) if m1_scores else 0.0
+        avg_m2 = sum(m2_scores) / len(m2_scores) if m2_scores else 0.0
+        return {
+            "avg_m1": avg_m1,
+            "avg_m2": avg_m2,
+            "weight_m1": 0.50,
+            "weight_m2": 0.50
+        }
 
-    avg_m1 = sum(m1_scores) / len(m1_scores) if m1_scores else 0.0
-    avg_m2 = sum(m2_scores) / len(m2_scores) if m2_scores else 0.0
-
-    if avg_m1 == 0 and avg_m2 == 0:
-        w_m1, w_m2 = 0.5, 0.5
-    else:
-        total = avg_m1 + avg_m2
-        raw_m1 = (avg_m1 / total) if total > 0 else 0.5
-        w_m1 = max(0.20, min(0.80, raw_m1))
-        w_m2 = 1.0 - w_m1
+    avg_m1 = sum(m1_scores) / len(m1_scores)
+    avg_m2 = sum(m2_scores) / len(m2_scores)
+    total = avg_m1 + avg_m2
+    raw_m1 = (avg_m1 / total) if total > 0 else 0.50
+    w_m1 = max(0.30, min(0.70, raw_m1))
+    w_m2 = 1.0 - w_m1
 
     return {
         "avg_m1": avg_m1,
@@ -502,38 +535,27 @@ def calculate_model_engagement_ratio(rows, acc_filter=None):
         "weight_m2": w_m2
     }
 
-def decide_post_model_by_ai(slot_time: str, model_weights: dict) -> bool:
-    w1 = model_weights.get("weight_m1", 0.5)
-
-    try:
-        h = int(slot_time.split(":")[0])
-        if h in [12, 13, 19, 20, 21]:
-            w1 = max(0.15, w1 - 0.15)
-        elif h in [7, 8, 15, 16, 22]:
-            w1 = min(0.85, w1 + 0.15)
-    except Exception:
-        pass
-
-    return random.random() < w1
-
-def decide_post_model_for_account(acc_name: str, cfg_data: dict, slot_time: str, rows: list, default_model_stats: dict) -> bool:
+def get_account_m1_ratio_pct(acc_name: str, cfg_data: dict, rows: list) -> float:
     mode_key = f"model_decision_mode_{acc_name}"
-    mode = cfg_data.get(mode_key, cfg_data.get("model_decision_mode", "MANUAL")).strip().upper()
+    mode = cfg_data.get(mode_key, cfg_data.get("model_decision_mode", "AI_DYNAMIC")).strip().upper()
 
     if mode == "AI_DYNAMIC":
         acc_stats = calculate_model_engagement_ratio(rows, acc_filter=acc_name)
-        return decide_post_model_by_ai(slot_time, acc_stats)
+        return acc_stats.get("weight_m1", 0.50) * 100.0
 
     ratio_key = f"model_1_ratio_{acc_name}"
     try:
-        m1_ratio = float(cfg_data.get(ratio_key, cfg_data.get("model_1_ratio", 30)))
+        m1_ratio = float(cfg_data.get(ratio_key, cfg_data.get("model_1_ratio", 50)))
     except Exception:
-        m1_ratio = 30.0
+        m1_ratio = 50.0
 
-    return (random.uniform(0, 100) < m1_ratio)
+    # Jika di Config tidak sengaja tertulis 0 padahal mode manual default, beri default 40% agar Model 1 tetap jalan
+    if ratio_key not in cfg_data and "model_1_ratio" not in cfg_data:
+        m1_ratio = 45.0
+    return m1_ratio
 
 # ==========================================
-# PEMBUATAN DRAF OTOMATIS (DENGAN BATCH LIMIT)
+# PEMBUATAN DRAF OTOMATIS (ANTI-DOBEL & INTERLEAVED MODEL 1 & 2)
 # ==========================================
 def auto_generate_today_drafts_if_needed(sh, accounts_map):
     now_dt = datetime.now(TZ)
@@ -575,7 +597,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         daily_video = 25
     posts_per_account = min(posts_per_account, 50)
 
-    model_stats = calculate_model_engagement_ratio(existing_rows)
     learnings = extract_self_learning_patterns(existing_rows)
     winning_copies = learnings["winning_copies"]
     winning_products_map = learnings["winning_products"]
@@ -588,12 +609,24 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
             f"(Tirulah ritme santainya tanpa menyalin kata per kata)\n"
         )
 
+    # Hitung progres & catat jam terakhir yang sudah ada di Sheet hari ini per akun (Anti-Dobel)
     account_today_counts = {}
+    account_latest_minute = {}
+    existing_slot_keys = set()
+
     if len(existing_rows) > 1:
         for r in existing_rows[1:]:
-            if len(r) >= 3 and str(r[0]).strip() == today_str:
-                acc_name_row = str(r[2]).strip()
-                account_today_counts[acc_name_row] = account_today_counts.get(acc_name_row, 0) + 1
+            if len(r) >= 3:
+                r_date = str(r[0]).strip().replace("'", "")
+                r_time = str(r[1]).strip().replace("'", "")
+                r_acc = str(r[2]).strip()
+                if r_date == today_str and r_acc:
+                    acc_key = r_acc.lower()
+                    account_today_counts[acc_key] = account_today_counts.get(acc_key, 0) + 1
+                    existing_slot_keys.add((today_str, r_time, acc_key))
+                    t_min = parse_time_str(r_time)
+                    if t_min > account_latest_minute.get(acc_key, -1):
+                        account_latest_minute[acc_key] = t_min
 
     target_cfg_acc = cfg_data.get("target_autopilot_account", "-- Semua Akun (All Accounts) --").strip()
     if target_cfg_acc != "-- Semua Akun (All Accounts) --" and target_cfg_acc in active_accounts:
@@ -601,7 +634,10 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     else:
         candidate_accounts = active_accounts
 
-    accounts_to_generate = [acc for acc in candidate_accounts if account_today_counts.get(acc, 0) < posts_per_account]
+    accounts_to_generate = [
+        acc for acc in candidate_accounts
+        if account_today_counts.get(acc.lower(), 0) < posts_per_account
+    ]
 
     if not accounts_to_generate:
         print(f"[AUTO-GEN] Semua akun sudah memiliki draf lengkap ({posts_per_account} post) untuk {today_str}.")
@@ -621,6 +657,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         base_start_m = cfg_start_minutes
 
     end_clock = cfg_data.get("end_time", "23:45")
+    end_m_limit = parse_time_str(end_clock)
 
     prod_ws = sh.worksheet("Products")
     all_prods = prod_ws.get_all_records()
@@ -657,25 +694,43 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
             print(f"[AUTO-GEN] Batas batch ({MAX_DRAFTS_PER_RUN} draf) tercapai, sisa draf dilanjutkan di siklus berikutnya.")
             break
 
-        existing_cnt = account_today_counts.get(acc_name, 0)
+        acc_key = acc_name.lower()
+        existing_cnt = account_today_counts.get(acc_key, 0)
         rem_count = posts_per_account - existing_cnt
         if rem_count <= 0:
             continue
 
-        batch_rem = min(rem_count, MAX_DRAFTS_PER_RUN - total_generated_this_run)
-        print(f"[AUTO-GEN] Meracik batch {batch_rem} post untuk @{acc_name} (Progress: {existing_cnt}/{posts_per_account})...")
+        # Jika sudah ada jadwal hari ini (misal sampai 14:20), batch berikutnya WAJIB mulai setelah jam terakhir tersebut!
+        last_sched_m = account_latest_minute.get(acc_key, -1)
+        if last_sched_m > 0:
+            est_gap = max(20, int((end_m_limit - last_sched_m) / max(1, rem_count)))
+            acc_start_m = max(base_start_m + (acc_idx * 2), last_sched_m + est_gap)
+        else:
+            acc_start_m = base_start_m + (acc_idx * 2)
 
-        acc_start_m = min(base_start_m + (acc_idx * 2), 23 * 60 + 30)
+        if acc_start_m >= end_m_limit:
+            print(f"[AUTO-GEN] Slot jam hari ini untuk @{acc_name} sudah mencapai batas akhir ({end_clock}).")
+            continue
+
         staggered_start = f"{acc_start_m // 60:02d}:{acc_start_m % 60:02d}"
+        batch_rem = min(rem_count, MAX_DRAFTS_PER_RUN - total_generated_this_run)
+
+        m1_pct = get_account_m1_ratio_pct(acc_name, cfg_data, existing_rows)
+        full_models_template = arrange_post_models(posts_per_account, m1_pct)
 
         all_rem_slots = generate_slots(rem_count, start_time_str=staggered_start, end_time_str=end_clock)
         slots = all_rem_slots[:batch_rem]
         types_list = full_types_template[existing_cnt : existing_cnt + batch_rem]
+        models_list = full_models_template[existing_cnt : existing_cnt + batch_rem]
+
+        print(f"[AUTO-GEN] Meracik {batch_rem} post untuk @{acc_name} mulai jam {staggered_start} (Progress: {existing_cnt}/{posts_per_account} | Target Model 1: {m1_pct:.0f}%)...")
 
         acc_rows = []
-        for slot_time, p_type in zip(slots, types_list):
+        for slot_time, p_type, direct_to_main in zip(slots, types_list, models_list):
+            if (today_str, slot_time, acc_key) in existing_slot_keys:
+                continue
+
             vibe = random.choice(THREADS_VIBES)
-            direct_to_main = decide_post_model_for_account(acc_name, cfg_data, slot_time, existing_rows, model_stats)
 
             try:
                 if p_type == "viral":
@@ -693,6 +748,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                     p_cur = pick_weighted_product(prods_with_media if prods_with_media else ready_prods)
 
                     if direct_to_main:
+                        # MODEL 1: Link fleksibel di awal/tengah/akhir main_text, reply_text KOSONG
                         pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
                         prompt = (
                             f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
@@ -711,6 +767,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                         acc_rows.append([today_str, slot_time, acc_name, full_main_post, media_formatted, "", p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
                     else:
+                        # MODEL 2: Tanpa link di main_text, Link ditaruh di reply_text
                         prompt = (
                             f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
                             f"Tulis postingan pengantar video untuk produk: {p_cur['product_name']}.\n"
@@ -770,6 +827,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                         aff_reply = f"{clean_cta_txt}\n{p_cur['affiliate_link']}"
                         acc_rows.append([today_str, slot_time, acc_name, clean_main_txt, "", aff_reply, p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
+                existing_slot_keys.add((today_str, slot_time, acc_key))
                 total_generated_this_run += 1
                 time.sleep(3)
             except Exception as gen_err:
@@ -777,14 +835,27 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                 break
 
         if acc_rows:
-            try:
-                data_ws.append_rows(acc_rows)
-                print(f"[AUTO-GEN] Berhasil menyimpan {len(acc_rows)} baris untuk @{acc_name}!")
-            except Exception as e_app:
-                print(f"[WARN] append_rows gagal ({e_app}), menyimpan baris per baris...")
-                for r_item in acc_rows:
-                    data_ws.append_row(r_item)
-                    time.sleep(0.3)
+            # Cek ulang data terbaru di Sheet tepat sebelum menulis agar jika ada 2 proses jalan bersamaan tidak dobel
+            fresh_rows = data_ws.get_all_values()
+            fresh_keys = set()
+            for fr in fresh_rows[1:]:
+                if len(fr) >= 3:
+                    fresh_keys.add((str(fr[0]).strip().replace("'", ""), str(fr[1]).strip().replace("'", ""), str(fr[2]).strip().lower()))
+
+            deduped_rows = [
+                row_item for row_item in acc_rows
+                if (row_item[0], row_item[1], row_item[2].lower()) not in fresh_keys
+            ]
+
+            if deduped_rows:
+                try:
+                    data_ws.append_rows(deduped_rows)
+                    print(f"[AUTO-GEN] Berhasil menyimpan {len(deduped_rows)} baris unik untuk @{acc_name}!")
+                except Exception as e_app:
+                    print(f"[WARN] append_rows gagal ({e_app}), menyimpan baris per baris...")
+                    for r_item in deduped_rows:
+                        data_ws.append_row(r_item)
+                        time.sleep(0.3)
 
 # ==========================================
 # MODUL PUBLIKASI KE THREADS API
@@ -884,7 +955,7 @@ def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: 
     raise Exception("Gagal publish ke Threads")
 
 # ==========================================
-# RUNNER UTAMA
+# RUNNER UTAMA (DENGAN PENJAGA ANTI-DOBEL PUBLISH)
 # ==========================================
 def run_worker():
     print(f"[{datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')} WIB] Memeriksa jadwal antrean...")
@@ -916,6 +987,16 @@ def run_worker():
     if len(rows) <= 1:
         return
 
+    # Catat slot (date, time, account) yang SUDAH POSTED agar jika ada baris kembar di Sheet, tidak diposting 2x
+    already_posted_slots = set()
+    for r in rows[1:]:
+        if len(r) >= 8 and str(r[7]).strip().upper() == "POSTED":
+            already_posted_slots.add((
+                str(r[0]).strip().replace("'", ""),
+                str(r[1]).strip().replace("'", ""),
+                str(r[2]).strip().lower()
+            ))
+
     now_dt = datetime.now(TZ)
     published_this_run = 0
 
@@ -927,8 +1008,8 @@ def run_worker():
         while len(r) < 12:
             r.append("")
 
-        post_date = r[0].strip()
-        post_time = r[1].strip()
+        post_date = r[0].strip().replace("'", "")
+        post_time = r[1].strip().replace("'", "")
         target_acc = r[2].strip()
         main_text = r[3].strip()
         media_url = r[4].strip()
@@ -937,6 +1018,12 @@ def run_worker():
         target_hijack_id = r[11].strip()
 
         if status != "PENDING" or not main_text:
+            continue
+
+        slot_key = (post_date, post_time, target_acc.lower())
+        if slot_key in already_posted_slots:
+            data_ws.update_cell(idx, 8, "SKIPPED_DUPLICATE")
+            print(f"[ROW {idx}] Dilewati karena jadwal {post_date} {post_time} (@{target_acc}) sudah pernah terbit.")
             continue
 
         try:
@@ -959,7 +1046,7 @@ def run_worker():
         tok = acc_info["access_token"]
 
         data_ws.update_cell(idx, 8, "POSTING")
-        print(f"[ROW {idx}] Sedang memproses @{target_acc}...")
+        print(f"[ROW {idx}] Sedang memproses @{target_acc} ({'Model 1 - Direct' if not reply_chain_text else 'Model 2 - Reply'})...")
 
         try:
             clean_main_post = sanitize_threads_text(main_text)
@@ -979,6 +1066,7 @@ def run_worker():
             except TypeError:
                 data_ws.update(f"H{idx}:K{idx}", post_done_vals)
 
+            already_posted_slots.add(slot_key)
             published_this_run += 1
             print(f"[ROW {idx}] Sukses terbit: {main_id}")
 
