@@ -32,9 +32,66 @@ def get_secret(key, default=""):
 
 SPREADSHEET_ID = get_secret("SPREADSHEET_ID", "12HI63liR64ugPz8IHQHy2gAhOOzSDMt0D0-YHO5x08E")
 GCP_CREDS_BASE64 = get_secret("GCP_CREDS_BASE64")
-AI_API_KEY = get_secret("AI_API_KEY")
+AI_API_KEY = (
+    get_secret("AI_API_KEY")
+    or os.environ.get("GEMINI_API_KEY")
+    or os.environ.get("GOOGLE_API_KEY")
+    or ""
+)
+AI_API_KEYS = [k.strip().replace("'", "").replace('"', "") for k in str(AI_API_KEY).split(",") if k.strip()]
 
-# --- MATRIKS PILAR TOPIK THREADS DINAMIS ---
+# ==============================================================================
+# MATRIKS VIBE & PROMPT THREADS (SINKRON DENGAN WORKER.PY TERAKHIR)
+# ==============================================================================
+THREADS_VIBES = [
+    "Capek mental / Realistis: gaya orang lelah yang males ribet, praktis, to the point.",
+    "Self-deprecating humor: ngetawain kebiasaan diri sendiri yang dulu repot dan konyol.",
+    "Santai ala Close Friends: bahasa tongkrongan santai, celetukan natural, gak ada kesan jualan.",
+    "Aesthetic & mindful: fokus ke ketenangan pikiran, kenyamanan ruang, atau kepuasan visual.",
+    "Review jujur tanpa filter: lugas, apa adanya, langsung sebut kenapa barang ini ngebantu hidup.",
+    "Hot take / observasi santai: mempertanyakan kenapa orang masih ribet pakai cara lama."
+]
+
+VIRAL_OBSERVATIONS = [
+    "Observasi fenomena absurd atau kebiasaan sepele orang Indonesia sehari-hari.",
+    "Dilema umur 20-an ke atas: pertemanan menipis, energi sosial nol, atau culture shock kerja.",
+    "Debat sepele tapi bikin dua kubu warganet ribut santai di kolom komentar.",
+    "Shower thoughts tengah malam atau kebiasaan aneh yang ternyata dialami banyak orang.",
+    "Opini santai tentang hal yang sering diromantisasi padahal aslinya melelahkan."
+]
+
+# Variasi posisi link & CTA luwes untuk Model 1 (1 Post)
+MODEL_1_POSITION_PROMPTS = [
+    (
+        "POSISI LINK: AWAL KALIMAT.\n"
+        "Letakkan placeholder '[LINK_PRODUK]' di kalimat pembuka/awal cerita secara natural dan luwes. "
+        "Contoh alur: 'Gara-gara iseng nyobain lapak ini [LINK_PRODUK], drama kamar mandi berlumut akhirnya kelar...' "
+        "CTA harus mengalir santai menyatu dengan curhat, DILARANG pakai template kaku, panah emoji berlebihan, atau bahasa sales."
+    ),
+    (
+        "POSISI LINK: TENGAH KALIMAT.\n"
+        "Selipkan placeholder '[LINK_PRODUK]' di tengah-tengah cerita saat menyebutkan solusi, keunggulan, atau momen kepuasan pakai barangnya. "
+        "Contoh alur: 'Ternyata rahasia wajan gak gampang gosong cuma pakai silikon ini [LINK_PRODUK], beneran nol drama pas cuci...' "
+        "CTA harus luwes seperti celetukan ngobrol sama temen dekat, jangan terasa jualan."
+    ),
+    (
+        "POSISI LINK: AKHIR KALIMAT.\n"
+        "Letakkan placeholder '[LINK_PRODUK]' di akhir cerita dengan kalimat rekomendasi penutup yang santai dan relate. "
+        "Contoh alur: '...daripada beli yang tiruan gampang patah, mending cek lapak aslinya di [LINK_PRODUK] mumpung lagi diskon.' "
+        "DILARANG pakai kalimat klise sales seperti 'Belinya disini ya' atau 'Klik link di bawah'."
+    )
+]
+
+# CTA pembuka untuk Model 2 (Link di kolom balasan - 2 Post)
+FALLBACK_CTA_STARTERS = [
+    "Awas dapet tiruan yang gampang rusak/tumpul ya, link official store yang beneran ori di sini:",
+    "Biar gak capek nyari manual ketumpuk seller abal-abal, ambil di lapak aslinya di sini:",
+    "Sumpah harganya gak masuk akal murahnya wkwk, cek sendiri di sini mumpung diskon:",
+    "Buat yang males ribet dan butuh solusinya juga, link toko resminya aku taro sini ya:"
+]
+
+CLOSING_NARRATIVES = FALLBACK_CTA_STARTERS
+
 TOPIC_PILLARS = {
     "DEBAT_SEPELE": [
         "perdebatan kebiasaan sepele sehari-hari yang bikin orang terbagi jadi dua kubu sengit",
@@ -67,69 +124,12 @@ TOPIC_PILLARS = {
 }
 
 PROMPT_RULES_CLEAN = """
-DILARANG KERAS (BLACKLIST TOPIK & KATA):
-1. JANGAN PERNAH bahas: gaji, tanggal tua, bokek, reksadana, tabungan, investasi finansial, bayar kos, biaya hidup, atau hitung-hitungan uang.
-2. JANGAN PERNAH pakai format tanya-jawab brosur iklan (Contoh terlarang: 'Pusing dengan X? Y solusinya!', 'Lagi butuh X?').
-3. DILARANG pakai kata klise sales: 'solusinya', 'cukup dengan...', 'dijamin', 'hadir untuk Anda', 'yuk buruan'.
-
-PANDUAN STRUKTUR & GAYA HOOK 1-3 DETIK:
-- Baris pertama WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 EMOJI relevan yang berfungsi sebagai rem jempol (stop scrolling) penonton.
-- Baris berikutnya gunakan sudut pandang orang pertama ('aku', 'suami', 'mertua', 'roommate', 'jujur baru sadar').
-- Tulis mengalir, curhat nyata, ada emosi/gregetan, celetukan santai khas obrolan linimasa Threads Indonesia.
-- Dilarang pakai hashtag (#), dilarang pakai tanda kutip dua.
+ATURAN GAYA BAHASA THREADS INDONESIA:
+1. DILARANG pakai kata 'POV:', '[Teks Utama]', '[Teks Balasan CTA]', atau gaya iklan brosur kaku.
+2. Langsung mulai dari masalah nyata sehari-hari dengan bahasa santai, jujur, dan relate.
+3. JANGAN pakai sebutan 'keranjang kuning' atau 'link di bio'.
+4. Dilarang pakai hashtag (#), dilarang pakai tanda kutip pembungkus.
 """
-
-VIRAL_HOOK_PATTERNS = [
-    "Trigger Drama Relasi (Pasangan/Mertua): Awali baris pertama dengan dialog/reaksi pasangan atau mertua huruf kapital (misal: 'SUAMI: KAMU KALAU NYUCI KOK RIBET BANGET? 😭😂' atau 'MERTUA DATANG MENDADAK: KOK RUMAH BERSIH BANGET? 😭').",
-    "Trigger Nyaris Malu (Social Anxiety): Awali baris pertama dengan momen horor/panik di tempat umum huruf kapital (misal: 'HAMPIR MALU DI RUANG MEETING KANTOR GARA-GARA BASKET 😭💀' atau 'MOMEN HOROR KUAH RENDANG TUMPAH KE KEMEJA PUTIH 😭😭').",
-    "Trigger Otoritas/Orang Dalam: Awali baris pertama dengan ucapan terima kasih huruf kapital ke dokter/tukang servis/koki/ahli yang kasih bocoran (misal: 'MAKASIH MBAK DOKTER YANG UDAH KASI TAU INI 😭🙏' atau 'BOCORAN DARI TEMEN YANG ANAK ARSITEK INTERIOR ✨').",
-    "Trigger Kaum Mager/Satset: Awali baris pertama dengan pengakuan malas huruf kapital tapi nemu jalan pintas (misal: 'SEBAGAI ORANG YANG PALING MALES NYIKAT KAMAR MANDI... 🤣' atau 'TIPE ORANG YANG MASAK MAUNYA 10 MENIT JADI DAN CUCIAN CUMA 1 BIJI 😂').",
-    "Trigger Satisfying/Sensorik: Awali baris pertama dengan kepuasan visual/suara huruf kapital (misal: 'THERAPY TERBAIK MINGGU INI: LIAT AIR RENDAMAN JADI BUTEK COKLAT 🤤😭' atau 'BUNYI KLIK DARI BENDA INI BIKIN KECANDUAN NGERAPIIN MEJA ✨').",
-    "Trigger Parno/Micro-Anxiety: Awali baris pertama dengan rasa cemas/jijik huruf kapital (misal: 'PARNO TIAP LIAT KECOA MUNCUL DARI BAWAH KITCHEN SET 😭' atau 'TRAUMA NEMU KELABANG DI DALEM SEPATU KERJA 😭😭').",
-    "Trigger Bukan Boros Tapi Investasi: Awali baris pertama dengan penegasan huruf kapital membela diri dari fomo (misal: 'BUKAN FOMO, INI NAMANYA INVESTASI RUMAH TANGGA 🤣😭' atau 'INVESTASI 20 RIBU BIAR GAK DEBAT SAMA LEMARI TIAP PAGI 😂').",
-    "Trigger Reverse Psychology: Awali baris pertama dengan melarang audiens membeli karena bikin kecanduan/over-rapi (misal: 'JANGAN PERNAH CO BARANG INI KALO GAK MAU KETAGIHAN 😭' atau 'BAHAYA BANGET PUNYA BENDA INI, BIKIN HAMPIR KESIANGAN NGANTOR 💀').",
-    "Trigger Terlambat Sadar (Umur): Awali baris pertama dengan keheranan kenapa baru tahu barang ini sekarang (misal: 'UMUR 27 TAHUN BARU SADAR BENDA KECIL INI NYELAMATIN PUNGGUNG 😭' atau 'KENAPA BENDA INI GAK MASUK KURIKULUM WAKTU GUA MERANTAU 5 TAHUN LALU?? 😭').",
-    "Trigger Skeptis Berujung Tobat: Awali baris pertama dengan mengira awalnya cuma gimik iklan huruf kapital (misal: 'KIRAIN CUMA GIMIK IKLAN LEBAY, TERNYATA EMANG SESAKTI ITU 😭' atau 'UDAH PASRAH SAMA WAJAN GOSONG, TERNYATA BENERAN BERES DALAM 3 MENIT 😭').",
-    "Trigger Mewah Modal Murah: Awali baris pertama dengan kontras harga receh vs sensasi hotel/kafe huruf kapital (misal: 'MODAL 25 RIBU TAPI KAMAR MANDI SERASA TOILET HOTEL BINTANG LIMA ✨' atau 'CARA BIAR GAK HABIS 50 RIBU TIAP HARI BUAT KOPI LITERAN KAFE ☕').",
-    "Trigger Tragedi Kamar Kos: Awali baris pertama dengan problem ruang sempit anak kos huruf kapital (misal: 'MUSUH TERBESAR ANAK KOS: KAMAR LEMBAB SAMPE TAS KULIT BERJAMUR 😭😭' atau 'KETIKA KAMAR KOS GAK ADA DAPUR TAPI MAU MAKAN ENAK TENGAH MALEM... 😂').",
-    "Trigger Drama Anabul: Awali baris pertama dengan kelakuan kucing/hewan peliharaan huruf kapital (misal: 'POV: KETIKA RUMAH DIKUASAI KUCING OREN DAN SEMUA BAJU BERBULU 😭' atau 'MENYELAMATKAN SOFA DARI AMUKAN KUCING OREN 🤣🙏').",
-    "Trigger Pet-Peeves Sepele: Awali baris pertama dengan gangguan sepele yang bikin naik darah huruf kapital (misal: 'SUARA PINTU BERDECIT TIAP MALAM YANG BIKIN JANTUNGAN RESMI BERAKHIR 😭' atau 'EMOSI TIAP CHARGER KENDUR PAS DITINGGAL TIDUR, PAGI BATERE 5% 💀').",
-    "Trigger Callout Segmen + Hacks: Awali baris pertama dengan panggilan segmen audiens huruf kapital (misal: 'BUIBU MERAPAT ‼️' atau 'ANAK KOS/TRAVELER MERAPAT ‼️') lalu bandingkan cara ini dengan cara lama yang bikin rugi/hancur."
-]
-
-CLOSING_NARRATIVES = [
-    "Btw banyak yang nanya di DM, ini link toko resmi tempat aku beli ya mumpung masih promo:",
-    "Biar gak salah beli atau dapet yang zonk, aku taro link official store-nya di sini ya:",
-    "Yang mau samaan atau sekadar cek review pembeli lainnya, langsung kepoin di sini:",
-    "Spill link belinya di sini ya guys, kemarin pas aku cek lagi ada diskon lumayan:",
-    "Daripada ribet nyari tokonya satu-satu, langsung meluncur ke toko resminya di sini:",
-    "Kalo mau checkout mending sekarang sebelum kehabisan stok, link belinya di sini:",
-    "Kemarin dapet harga flash sale di toko ini dan pengirimannya cepet, linknya:",
-    "Biar dapet garansi resmi dan barang original, belinya lewat link ini ya:",
-    "Buat yang minta spill racunnya, ini link toko terpercaya yang sering aku pake:",
-    "Yang mau CO taro keranjang dulu aja, mumpung vouchernya masih aktif di sini:"
-]
-
-MODEL_1_POSITION_PROMPTS = [
-    (
-        "POSISI LINK: AWAL KALIMAT.\n"
-        "Letakkan placeholder '[LINK_PRODUK]' di kalimat pembuka/awal cerita secara natural dan luwes. "
-        "Contoh alur: 'Gara-gara iseng nyobain lapak ini [LINK_PRODUK], drama kamar mandi berlumut akhirnya kelar...' "
-        "CTA harus mengalir santai menyatu dengan curhat, DILARANG pakai template kaku, panah emoji berlebihan, atau bahasa sales."
-    ),
-    (
-        "POSISI LINK: TENGAH KALIMAT.\n"
-        "Selipkan placeholder '[LINK_PRODUK]' di tengah-tengah cerita saat menyebutkan solusi, keunggulan, atau momen kepuasan pakai barangnya. "
-        "Contoh alur: 'Ternyata rahasia wajan gak gampang gosong cuma pakai silikon ini [LINK_PRODUK], beneran nol drama pas cuci...' "
-        "CTA harus luwes seperti celetukan ngobrol sama temen dekat, jangan terasa jualan."
-    ),
-    (
-        "POSISI LINK: AKHIR KALIMAT.\n"
-        "Letakkan placeholder '[LINK_PRODUK]' di akhir cerita dengan kalimat rekomendasi penutup yang santai dan relate. "
-        "Contoh alur: '...daripada beli yang tiruan gampang patah, mending cek lapak aslinya di [LINK_PRODUK] mumpung lagi diskon.' "
-        "DILARANG pakai kalimat klise sales seperti 'Belinya disini ya' atau 'Klik link di bawah'."
-    )
-]
 
 def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
     if not text:
@@ -154,6 +154,7 @@ def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
     return t
 
 def format_model_1_text(raw_text: str, aff_link: str) -> str:
+    """Menyematkan tautan affiliate ke posisi placeholder (awal/tengah/akhir) secara luwes."""
     pattern = r'\[\s*(?:LINK_PRODUK|LINK|LINK PRODUK)\s*\]'
     if re.search(pattern, raw_text, flags=re.IGNORECASE):
         raw_text = re.sub(pattern, aff_link, raw_text, flags=re.IGNORECASE)
@@ -406,7 +407,7 @@ def generate_slots(total_count, start_time_str="04:30", end_time_str="23:45"):
     if total_count <= 0:
         return []
     if total_count == 1:
-        return ["12:00"]
+        return [start_time_str]
     h1, m1 = map(int, start_time_str.split(":"))
     h2, m2 = map(int, end_time_str.split(":"))
     start_minutes = h1 * 60 + m1
@@ -446,15 +447,9 @@ def prepare_media_for_post(media_raw: str, duplicate_single_video: bool = True) 
     return ", ".join(parts)
 
 def get_random_dynamic_topic() -> tuple[str, str]:
-    category = random.choice(list(TOPIC_PILLARS.keys()))
-    sub_topic = random.choice(TOPIC_PILLARS[category])
-    angles = [
-        "Celetukan keheranan santai khas tongkrongan",
-        "Pengakuan kebiasaan unik yang ternyata banyak dialami orang lain",
-        "Opini pemantik yang memancing dua kubu warganet berkomentar sengit",
-        "Keluhan relatable terhadap situasi tersebut tanpa nada menggurui"
-    ]
-    return sub_topic, random.choice(angles)
+    topik = random.choice(VIRAL_OBSERVATIONS)
+    vibe = random.choice(THREADS_VIBES)
+    return topik, vibe
 
 def pick_length_by_bias(bias: str) -> str:
     lengths = ["Pendek", "Sedang", "Panjang"]
@@ -470,11 +465,11 @@ def pick_length_by_bias(bias: str) -> str:
 
 def get_length_prompt_desc(length_opt: str) -> str:
     if "Pendek" in length_opt:
-        return "Tulis sangat to-the-point dan ringkas (maksimal 100-140 karakter, 1-2 kalimat saja)."
+        return "Tulis ringkas dan to-the-point (sekitar 120-160 karakter)."
     elif "Panjang" in length_opt:
-        return "Tulis mengalir seperti curhat storytelling lengkap (sekitar 300-450 karakter)."
+        return "Tulis mengalir seperti curhat singkat (maksimal 290 karakter)."
     else:
-        return "Tulis dengan panjang sedang standar Threads (sekitar 180-260 karakter)."
+        return "Tulis dengan panjang standar Threads (maksimal 250 karakter)."
 
 def resolve_reply_count(reply_mode: str) -> int:
     if "1 - 3" in reply_mode:
@@ -488,16 +483,13 @@ def resolve_reply_count(reply_mode: str) -> int:
         return max(1, int(m.group()))
     return 1
 
-def resolve_style_desc(style_opt: str) -> str:
-    if "Serahkan ke AI" in style_opt:
-        pool = [
-            "Curhat Santai & Relate (Bahasa Threads anak muda)",
-            "Storytelling Pengalaman Pribadi (Masalah Emosi -> Solusi)",
-            "Review Jujur & Solutif (Highlight keunggulan barang)",
-            "Racun Belanja Belagu/Lucu (Antusias & bikin pengen punya)"
-        ]
-        return f"Gaya bahasa: {random.choice(pool)}"
-    return f"Gaya bahasa: {style_opt}"
+def resolve_vibe_desc(style_opt: str) -> str:
+    if not style_opt or "Serahkan ke AI" in style_opt:
+        return random.choice(THREADS_VIBES)
+    for v in THREADS_VIBES:
+        if style_opt.lower() in v.lower():
+            return v
+    return random.choice(THREADS_VIBES)
 
 def update_config_keys(sh_obj, kv_pairs: dict):
     cfg_ws = sh_obj.worksheet("Config")
@@ -512,118 +504,190 @@ def update_config_keys(sh_obj, kv_pairs: dict):
         else:
             cfg_ws.append_row([k, str(v)])
 
-# --- CALL GEMINI REST API (AUTO DISCOVERY & ROBUST RETRY) ---
-def call_gemini_core(prompt: str) -> tuple:
-    key = str(AI_API_KEY).strip().replace("'", "").replace('"', "") if AI_API_KEY else ""
-    if not key:
-        raise Exception("API Key Gemini (AI_API_KEY) belum disetel di Secrets!")
+# ==============================================================================
+# GEMINI API ENGINE (DIKUNCI KE GEMINI-3.8-FLASH SINKRON DENGAN WORKER.PY)
+# ==============================================================================
+CACHED_WORKING_MODEL = None
 
-    # 1. Cek daftar model yang benar-benar aktif & diizinkan untuk API Key ini
-    valid_models = []
-    discovery_error = ""
+def get_best_model(key: str) -> tuple:
+    global CACHED_WORKING_MODEL
+    if CACHED_WORKING_MODEL:
+        return CACHED_WORKING_MODEL
+
+    available = []
     for ver in ["v1beta", "v1"]:
+        url = f"https://generativelanguage.googleapis.com/{ver}/models?key={key}"
         try:
-            r = requests.get(f"https://generativelanguage.googleapis.com/{ver}/models?key={key}", timeout=10)
+            r = requests.get(url, timeout=10)
             if r.status_code == 200:
                 data = r.json()
                 for m in data.get("models", []):
-                    if "generateContent" in m.get("supportedGenerationMethods", []):
-                        valid_models.append((ver, m["name"].replace("models/", "")))
-            else:
-                err_data = r.json() if "application/json" in r.headers.get("Content-Type", "") else {}
-                discovery_error = err_data.get("error", {}).get("message", r.text[:120])
-        except Exception as e:
-            discovery_error = str(e)[:100]
+                    methods = m.get("supportedGenerationMethods", [])
+                    if "generateContent" in methods:
+                        clean_name = m["name"].replace("models/", "")
+                        available.append((ver, clean_name))
+        except Exception:
+            pass
 
-    # Prioritaskan model terbaik dari daftar yang tersedia
-    preferred_order = ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-pro"]
-    def get_rank(item):
+    preferred_order = ["gemini-3.8-flash", "gemini-3.8-pro", "gemini-2.5-pro", "flash"]
+    def rank_model(item):
         _, name = item
         for idx, pref in enumerate(preferred_order):
             if pref in name.lower():
                 return idx
         return 99
 
-    valid_models.sort(key=get_rank)
+    available.sort(key=rank_model)
 
-    # Fallback default jika endpoint list_models dibatasi oleh kebijakan IAM
-    if not valid_models:
-        valid_models = [
-            ("v1beta", "gemini-1.5-flash"),
-            ("v1beta", "gemini-1.5-pro"),
-            ("v1", "gemini-1.5-flash"),
-            ("v1beta", "gemini-2.0-flash")
-        ]
+    if available:
+        CACHED_WORKING_MODEL = available[0]
+        return CACHED_WORKING_MODEL
 
-    # 2. Eksekusi generate content dengan model yang valid
+    CACHED_WORKING_MODEL = ("v1beta", "gemini-3.8-flash")
+    return CACHED_WORKING_MODEL
+
+def call_gemini_core(prompt: str) -> tuple:
+    if not AI_API_KEYS:
+        raise Exception("API Key Gemini (AI_API_KEY) belum disetel di Secrets!")
+
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.85, "topP": 0.95, "maxOutputTokens": 800}
+        "generationConfig": {
+            "temperature": 0.85,
+            "topP": 0.95,
+            "maxOutputTokens": 800
+        }
     }
 
     last_errors = []
-    for ver, m_name in valid_models:
-        url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
-        headers = {"Content-Type": "application/json"}
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=25)
-            if res.status_code == 200:
-                res_data = res.json()
-                if "candidates" in res_data and res_data["candidates"]:
-                    return res_data["candidates"][0]["content"]["parts"][0]["text"].strip(), f"{ver}/{m_name}"
-            else:
-                err_data = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
-                msg = err_data.get("error", {}).get("message", res.text[:100])
-                last_errors.append(f"{m_name} ({res.status_code}: {msg})")
-        except Exception as e:
-            last_errors.append(f"{m_name} ({str(e)[:50]})")
+    for key in AI_API_KEYS:
+        ver, m_name = get_best_model(key)
+        candidates_to_try = [(ver, m_name), ("v1beta", "gemini-3.8-flash")]
+        seen = set()
+        for v_cur, m_cur in candidates_to_try:
+            if (v_cur, m_cur) in seen:
+                continue
+            seen.add((v_cur, m_cur))
+            url = f"https://generativelanguage.googleapis.com/{v_cur}/models/{m_cur}:generateContent?key={key}"
+            headers = {"Content-Type": "application/json"}
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=25)
+                if res.status_code == 200:
+                    data = res.json()
+                    if "candidates" in data and data["candidates"]:
+                        text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        if text_out:
+                            return text_out, f"{v_cur}/{m_cur}"
+                else:
+                    err_json = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
+                    err_msg = err_json.get("error", {}).get("message", res.text[:120])
+                    last_errors.append(f"{m_cur} (HTTP {res.status_code}: {err_msg})")
+                    if res.status_code == 429:
+                        time_lib.sleep(2)
+            except Exception as e:
+                last_errors.append(f"{m_cur} Network Error: {str(e)[:100]}")
 
-    err_summary = " | ".join(last_errors[:2]) if last_errors else discovery_error
-    raise Exception(f"Gagal generate: {err_summary}")
+    err_summary = " | ".join(last_errors[-2:]) if last_errors else "Request gagal"
+    raise Exception(f"Google API Menolak Permintaan -> {err_summary}")
 
 def call_gemini(prompt: str) -> str:
     text, _ = call_gemini_core(prompt)
     return text
 
-def generate_affiliate_replies(prod_name: str, prod_hl: str, aff_link: str, reply_count: int) -> list:
-    if reply_count <= 0 or not aff_link:
-        return []
-
-    try:
-        prompt_closing = (
-            f"Tulis 1 kalimat pengantar santai dan natural (maksimal 70 karakter) sebelum spill link toko resmi pembelian '{prod_name}'. "
-            f"Contoh tema: info official store, voucher diskon toko, atau alasan checkout mumpung ready. "
-            f"Tanpa hashtag, tanpa tanda kutip, dan JANGAN tulis link-nya."
+# ==============================================================================
+# HELPER PEMBUAT KONTEN (SINKRON DENGAN GAYA POSTING WORKER.PY)
+# ==============================================================================
+def build_post_by_worker_style(p_type: str, prod: dict, direct_to_main: bool, vibe: str, winning_context_prompt: str, dup_video: bool = True) -> tuple:
+    """
+    Meracik (main_text, media_formatted, reply_chain_str, affiliate_link)
+    menggunakan gaya bahasa & struktur prompt yang identik dengan worker.py terakhir.
+    """
+    if p_type == "viral":
+        topik = random.choice(VIRAL_OBSERVATIONS)
+        prompt_v = (
+            f"Kamu adalah user Threads Indonesia yang santai dan relate.\n"
+            f"Tulis 1 postingan tentang: '{topik}'. Vibe: {vibe}.\n{winning_context_prompt}"
+            f"DILARANG pakai kata 'POV:' atau label apapun. Langsung tulis kalimat pembuka. Maksimal 220 karakter tanpa tanda kutip."
         )
-        closing_intro = call_gemini(prompt_closing).strip().strip('"').strip("'")
-        if not closing_intro or len(closing_intro) > 100:
-            closing_intro = random.choice(CLOSING_NARRATIVES)
-    except Exception:
-        closing_intro = random.choice(CLOSING_NARRATIVES)
+        p_text = call_gemini(prompt_v)
+        clean_p_text = sanitize_threads_text(p_text)
+        return clean_p_text, "", "", ""
 
-    final_reply = f"{closing_intro}\n{aff_link}"
+    elif p_type == "video":
+        if direct_to_main:
+            pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
+            prompt = (
+                f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
+                f"Tulis 1 postingan pengantar video untuk produk: {prod['product_name']}.\n"
+                f"Highlight: {prod.get('highlight', '')}. Vibe: {vibe}.\n{winning_context_prompt}\n"
+                f"ATURAN KHUSUS:\n"
+                f"1. {pos_rule}\n"
+                f"2. Tulis placeholder persis: '[LINK_PRODUK]' (nanti sistem yang menempelkan link asli).\n"
+                f"3. DILARANG pakai kata 'POV:', '[Teks Utama]', atau gaya iklan brosur kaku.\n"
+                f"4. Maksimal 260 karakter tanpa tanda kutip."
+            )
+            raw_out = call_gemini(prompt)
+            full_main_post = format_model_1_text(raw_out, prod['affiliate_link'])
+            media_formatted = prepare_media_for_post(str(prod.get("media_url", "")).strip(), duplicate_single_video=dup_video)
+            return full_main_post, media_formatted, "", prod['affiliate_link']
+        else:
+            prompt = (
+                f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
+                f"Tulis postingan pengantar video untuk produk: {prod['product_name']}.\n"
+                f"Highlight: {prod.get('highlight', '')}. Vibe: {vibe}.\n{winning_context_prompt}\n"
+                f"ATURAN POSTINGAN UTAMA:\n"
+                f"1. DILARANG menggunakan kata 'POV:', '[Teks Utama]', atau bahasa iklan kaku. Langsung mulai dari masalah nyata sehari-hari.\n"
+                f"2. JANGAN taruh link atau sebutan 'keranjang kuning'/'link bio'. Maksimal 290 karakter.\n\n"
+                f"ATURAN BALASAN CTA:\n"
+                f"1. Tulis 1 kalimat singkat penarik klik lapak Shopee (anti-zonk, cari lapak original, atau heran harganya murah). DILARANG pakai '[Teks Balasan CTA]'. Maksimal 110 karakter.\n\n"
+                f"PENTING: Pisahkan HANYA dengan tanda pembatas '---REPLY_CTA---' tanpa label tambahan apapun!"
+            )
+            raw_out = call_gemini(prompt)
+            if "---REPLY_CTA---" in raw_out:
+                parts = raw_out.split("---REPLY_CTA---", 1)
+                main_txt, cta_txt = parts[0].strip(), parts[1].strip()
+            else:
+                main_txt, cta_txt = raw_out.strip(), random.choice(FALLBACK_CTA_STARTERS)
 
-    if reply_count == 1:
-        return [final_reply]
+            clean_main_txt = sanitize_threads_text(main_txt)
+            clean_cta_txt = sanitize_threads_text(cta_txt)
+            aff_reply = f"{clean_cta_txt}\n{prod['affiliate_link']}"
+            media_formatted = prepare_media_for_post(str(prod.get("media_url", "")).strip(), duplicate_single_video=dup_video)
+            return clean_main_txt, media_formatted, aff_reply, prod['affiliate_link']
 
-    intermediate_count = reply_count - 1
-    prompt_intermediate = (
-        f"Untuk postingan Threads tentang produk '{prod_name}' (Keunggulan: '{prod_hl}'). "
-        f"Tulis persis {intermediate_count} tweet balasan pendek lanjutan yang menyambung secara bertahap (sebelum spill link). "
-        f"Gaya santai, relate, jujur seperti curhat pengalaman pakai. Pisahkan setiap balasan dengan tanda '---'. "
-        f"Maksimal 120 karakter per balasan. DILARANG pakai hashtag dan JANGAN sebutkan link."
-    )
-    try:
-        raw_res = call_gemini(prompt_intermediate)
-        parts = [p.strip() for p in raw_res.split("---") if p.strip()]
-        replies = parts[:intermediate_count]
-        while len(replies) < intermediate_count:
-            replies.append("Worth it banget sih ini buat pemakaian jangka panjang.")
-    except Exception:
-        replies = ["Barang ini praktis banget buat kebutuhan sehari-hari." for _ in range(intermediate_count)]
+    else:
+        if direct_to_main:
+            pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
+            prompt = (
+                f"Tulis 1 postingan teks Threads tentang produk: {prod['product_name']}.\n"
+                f"Keunggulan: {prod.get('highlight', '')}. Vibe: {vibe}.\n{winning_context_prompt}\n"
+                f"ATURAN KHUSUS:\n"
+                f"1. {pos_rule}\n"
+                f"2. Tulis placeholder persis: '[LINK_PRODUK]' (nanti sistem yang menempelkan link asli).\n"
+                f"3. DILARANG pakai label '[Teks Utama]' atau 'POV:'.\n"
+                f"4. Maksimal 260 karakter tanpa tanda kutip."
+            )
+            raw_out = call_gemini(prompt)
+            full_main_post = format_model_1_text(raw_out, prod['affiliate_link'])
+            return full_main_post, "", "", prod['affiliate_link']
+        else:
+            prompt = (
+                f"Tulis postingan teks Threads tentang produk: {prod['product_name']}.\n"
+                f"Keunggulan: {prod.get('highlight', '')}. Vibe: {vibe}.\n{winning_context_prompt}\n"
+                f"DILARANG pakai label '[Teks Utama]' atau 'POV:'.\n"
+                f"PISAHKAN HANYA DENGAN '---REPLY_CTA---' diikuti 1 kalimat balasan CTA singkat."
+            )
+            raw_out = call_gemini(prompt)
+            if "---REPLY_CTA---" in raw_out:
+                parts = raw_out.split("---REPLY_CTA---", 1)
+                main_txt, cta_txt = parts[0].strip(), parts[1].strip()
+            else:
+                main_txt, cta_txt = raw_out.strip(), random.choice(FALLBACK_CTA_STARTERS)
 
-    replies.append(final_reply)
-    return replies
+            clean_main_txt = sanitize_threads_text(main_txt)
+            clean_cta_txt = sanitize_threads_text(cta_txt)
+            aff_reply = f"{clean_cta_txt}\n{prod['affiliate_link']}"
+            return clean_main_txt, "", aff_reply, prod['affiliate_link']
 
 def check_threads_token(user_id: str, access_token: str) -> dict:
     url = f"https://graph.threads.net/v1.0/me?fields=id,username,threads_profile_picture_url&access_token={access_token}"
@@ -652,6 +716,37 @@ except Exception as e:
     else:
         st.error(f"Gagal memuat data Google Sheets: {e}")
     st.stop()
+
+# Pre-compute AI Self-Learning Context dari seluruh riwayat Sheets
+GLOBAL_MODEL_STATS = calculate_model_engagement_ratio(all_data)
+GLOBAL_LEARNINGS = extract_self_learning_patterns(all_data)
+WINNING_COPIES = GLOBAL_LEARNINGS["winning_copies"]
+WINNING_PRODUCTS_MAP = GLOBAL_LEARNINGS["winning_products"]
+
+WINNING_CONTEXT_PROMPT = ""
+if WINNING_COPIES:
+    formatted_examples = "\n---\n".join(WINNING_COPIES[:2])
+    WINNING_CONTEXT_PROMPT = (
+        f"\n[REFERENSI GAYA TULISAN ENGAGEMENT TERTINGGI]:\n{formatted_examples}\n"
+        f"(Tirulah ritme santainya tanpa menyalin kata per kata)\n"
+    )
+
+def pick_weighted_product_global(prod_list, fallback_pool):
+    pool = prod_list if prod_list else fallback_pool
+    if not pool:
+        return {}
+    weights = []
+    for p in pool:
+        link = str(p.get("affiliate_link", "")).strip()
+        sc = WINNING_PRODUCTS_MAP.get(link, None)
+        if sc is None:
+            w = 3.5
+        elif sc == 0:
+            w = 1.2
+        else:
+            w = 1.0 + min(sc / 150.0, 6.0)
+        weights.append(w)
+    return random.choices(pool, weights=weights, k=1)[0]
 
 # Tab Menu
 tabs = st.tabs([
@@ -769,15 +864,9 @@ with tabs[0]:
 
     col_st1, col_st2 = st.columns(2)
     with col_st1:
-        ai_style_options = [
-            "Serahkan ke AI (Smart Adaptive / Acak Tiap Post)",
-            "Curhat Santai & Relate (Bahasa Threads anak muda)",
-            "Storytelling Pengalaman Pribadi (Masalah -> Solusi)",
-            "Review Jujur & Solutif (Highlight keunggulan produk)",
-            "Racun Belanja Shopee (Antusias & bikin pengen checkout)"
-        ]
+        ai_style_options = ["Serahkan ke AI (Smart Adaptive / Acak Tiap Post)"] + THREADS_VIBES
         def_style_idx = ai_style_options.index(cur_ai_style) if cur_ai_style in ai_style_options else 0
-        sel_ai_style_ap = st.selectbox("🎨 Gaya Bahasa AI (Autopilot)", ai_style_options, index=def_style_idx)
+        sel_ai_style_ap = st.selectbox("🎨 Gaya Bahasa AI / Vibe (Autopilot)", ai_style_options, index=def_style_idx)
     with col_st2:
         bias_options = [
             "Dominan Sedang (Lebih banyak standar)",
@@ -840,7 +929,7 @@ with tabs[0]:
 
     st.divider()
     st.write("#### ⚖️ Pengaturan Komposisi Model Postingan per Akun (Model 1 vs Model 2)")
-    st.caption("Tentukan format postingan per akun: Model 1 (Direct Link fleksibel di Post Utama) vs Model 2 (Link di Kolom Balasan) via persentase manual atau diserahkan ke AI.")
+    st.caption("Tentukan format postingan per akun: Model 1 (Direct Link fleksibel di awal/tengah/akhir Post Utama) vs Model 2 (Link di Kolom Balasan) via persentase manual atau AI Self-Learning.")
 
     acc_options_model = acc_names_all if acc_names_all else ["-- Belum ada akun --"]
     sel_acc_model = st.selectbox(
@@ -889,12 +978,16 @@ with tabs[0]:
             final_m1_to_save = m1_slider_val
             final_m2_to_save = m2_slider_val
         else:
+            acc_live_stats = calculate_model_engagement_ratio(all_data, acc_filter=sel_acc_model)
+            ai_w1_pct = int(round(acc_live_stats["weight_m1"] * 100))
+            ai_w2_pct = 100 - ai_w1_pct
             final_m1_to_save = cur_acc_m1
             final_m2_to_save = 100 - cur_acc_m1
             st.info(
-                f"💡 **Diserahkan ke AI:** Komposisi Model 1 dan Model 2 untuk akun `{sel_acc_model}` "
-                f"akan diputuskan secara dinamis dan adaptif oleh AI (Multi-Armed Bandit) "
-                f"berdasarkan data views dan performa historis nyata."
+                f"💡 **Diserahkan ke AI Self-Learning:** Komposisi Model 1 dan Model 2 untuk akun `{sel_acc_model}` "
+                f"diputuskan secara dinamis berdasarkan skor engagement riil.\n\n"
+                f"📊 **Bobot AI Saat Ini:** Model 1 (`{ai_w1_pct}%` | Avg Score: `{acc_live_stats['avg_m1']:.1f}`) vs "
+                f"Model 2 (`{ai_w2_pct}%` | Avg Score: `{acc_live_stats['avg_m2']:.1f}`)"
             )
 
         if st.button(f"💾 Simpan Komposisi Model ({sel_acc_model})", type="primary", key=f"btn_save_model_{sel_acc_model}"):
@@ -917,11 +1010,16 @@ with tabs[0]:
             rekap_rows = []
             for a_name in acc_names_all:
                 a_mode = cfg_data.get(f"model_decision_mode_{a_name}", cfg_data.get("model_decision_mode", "MANUAL")).upper()
-                a_m1 = cfg_data.get(f"model_1_ratio_{a_name}", cfg_data.get("model_1_ratio", "30"))
-                try:
+                if a_mode == "AI_DYNAMIC":
+                    st_acc = calculate_model_engagement_ratio(all_data, acc_filter=a_name)
+                    a_m1 = str(int(round(st_acc["weight_m1"] * 100)))
                     a_m2 = str(100 - int(a_m1))
-                except:
-                    a_m2 = "70"
+                else:
+                    a_m1 = cfg_data.get(f"model_1_ratio_{a_name}", cfg_data.get("model_1_ratio", "30"))
+                    try:
+                        a_m2 = str(100 - int(a_m1))
+                    except:
+                        a_m2 = "70"
                 rekap_rows.append({
                     "Akun": a_name,
                     "Mode": "🤖 Diserahkan ke AI" if a_mode == "AI_DYNAMIC" else "🎯 Manual",
@@ -938,7 +1036,7 @@ with tabs[0]:
         if not sh_obj:
             st.error("Spreadsheet tidak tersedia.")
         else:
-            with st.spinner(f"Sedang meracik {total_plan} konten dengan AI Self-Learning (Model 1 & Model 2)..."):
+            with st.spinner(f"Sedang meracik {total_plan} konten dengan gaya worker.py & AI Self-Learning..."):
                 try:
                     if not acc_records:
                         st.error("Daftarkan akun di tab Akun Threads terlebih dahulu.")
@@ -952,134 +1050,39 @@ with tabs[0]:
                         data_ws = sh_obj.worksheet("data")
                         new_rows = []
 
-                        # AI Self-Learning & Bandit Engine Integration
-                        model_stats = calculate_model_engagement_ratio(all_data)
-                        learnings = extract_self_learning_patterns(all_data)
-                        winning_copies = learnings["winning_copies"]
-                        winning_products_map = learnings["winning_products"]
-
-                        winning_context_prompt = ""
-                        if winning_copies:
-                            formatted_examples = "\n---\n".join(winning_copies[:2])
-                            winning_context_prompt = (
-                                f"\n[REFERENSI GAYA TULISAN ENGAGEMENT TERTINGGI]:\n{formatted_examples}\n"
-                                f"(Tirulah ritme santainya tanpa menyalin kata per kata)\n"
-                            )
-
-                        def pick_weighted_product_app(prod_list):
-                            if not prod_list:
-                                return random.choice(ready_prods)
-                            weights = []
-                            for p in prod_list:
-                                link = str(p.get("affiliate_link", "")).strip()
-                                sc = winning_products_map.get(link, None)
-                                if sc is None:
-                                    w = 3.5
-                                elif sc == 0:
-                                    w = 1.2
-                                else:
-                                    w = 1.0 + min(sc / 150.0, 6.0)
-                            weights.append(w)
-                            return random.choices(prod_list, weights=weights, k=1)[0]
-
                         for acc_target in target_accounts_to_run:
                             for slot_time, p_type in zip(preview_slots, preview_types):
-                                chosen_len = pick_length_by_bias(sel_bias_autopilot)
-                                len_desc = get_length_prompt_desc(chosen_len)
-                                style_desc = resolve_style_desc(sel_ai_style_ap)
-                                direct_to_main = decide_post_model_for_account(acc_target, cfg_data, slot_time, all_data, model_stats)
+                                vibe = resolve_vibe_desc(sel_ai_style_ap)
+                                direct_to_main = decide_post_model_for_account(acc_target, cfg_data, slot_time, all_data, GLOBAL_MODEL_STATS)
 
                                 if p_type == "viral":
-                                    sub_top, angle_top = get_random_dynamic_topic()
-                                    prompt_v = (
-                                        f"Tulis 1 postingan Threads bahasa Indonesia tentang: '{sub_top}'.\n"
-                                        f"Sudut pandang: {angle_top}.\n{winning_context_prompt}{PROMPT_RULES_CLEAN}\n{len_desc}\n"
-                                        f"Maksimal 220 karakter. Langsung tulis teks postingan tanpa tanda kutip."
+                                    main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
+                                        "viral", {}, direct_to_main, vibe, WINNING_CONTEXT_PROMPT, dup_video=auto_dup_video
                                     )
-                                    v_text = call_gemini(prompt_v)
-                                    clean_v_text = sanitize_threads_text(v_text)
-                                    new_rows.append([today_str, slot_time, acc_target, clean_v_text, "", "", "", "PENDING", "", "", "", ""])
-
                                 elif p_type == "video":
-                                    prod = pick_weighted_product_app(prods_with_media if prods_with_media else ready_prods)
-
-                                    if direct_to_main:
-                                        pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
-                                        prompt_a = (
-                                            f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
-                                            f"Tulis 1 postingan pengantar video untuk produk: '{prod['product_name']}' (Keunggulan: {prod.get('highlight', '')}).\n"
-                                            f"{winning_context_prompt}\n"
-                                            f"ATURAN KHUSUS:\n"
-                                            f"1. {pos_rule}\n"
-                                            f"2. Tulis placeholder persis: '[LINK_PRODUK]' (nanti sistem yang menempelkan link asli).\n"
-                                            f"3. DILARANG pakai kata 'POV:', '[Teks Utama]', atau gaya iklan brosur kaku.\n"
-                                            f"4. Maksimal 260 karakter tanpa tanda kutip."
-                                        )
-                                        raw_out = call_gemini(prompt_a)
-                                        full_main_post = format_model_1_text(raw_out, prod["affiliate_link"])
-                                        raw_m = str(prod.get("media_url", "")).strip()
-                                        final_media = prepare_media_for_post(raw_m, duplicate_single_video=auto_dup_video)
-
-                                        new_rows.append([today_str, slot_time, acc_target, full_main_post, final_media, "", prod["affiliate_link"], "PENDING", "", "", "", ""])
-                                    else:
-                                        chosen_hook = random.choice(VIRAL_HOOK_PATTERNS)
-                                        prompt_a = (
-                                            f"Tulis 1 postingan Threads bahasa Indonesia penahan jempol (stop scrolling) penonton video untuk produk: '{prod['product_name']}' "
-                                            f"(Keunggulan: {prod.get('highlight', '')}).\n"
-                                            f"- Formula Hook: {chosen_hook}\n"
-                                            f"{winning_context_prompt}\n"
-                                            f"- {style_desc}\n- {len_desc}\n{PROMPT_RULES_CLEAN}\n"
-                                            f"Ingat: Baris 1 WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 emoji pemantik rasa penasaran dalam 1-3 detik. Langsung tulis tanpa tanda kutip."
-                                        )
-                                        main_txt = call_gemini(prompt_a)
-                                        clean_main_txt = sanitize_threads_text(main_txt)
-                                        act_rep_count = resolve_reply_count(sel_reply_mode_ap)
-                                        replies_chain = generate_affiliate_replies(prod['product_name'], prod.get('highlight', ''), prod['affiliate_link'], act_rep_count)
-                                        raw_m = str(prod.get("media_url", "")).strip()
-                                        final_media = prepare_media_for_post(raw_m, duplicate_single_video=auto_dup_video)
-
-                                        new_rows.append([today_str, slot_time, acc_target, clean_main_txt, final_media, "\n---REPLY---\n".join(replies_chain), prod["affiliate_link"], "PENDING", "", "", "", ""])
-
+                                    prod = pick_weighted_product_global(prods_with_media, ready_prods)
+                                    main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
+                                        "video", prod, direct_to_main, vibe, WINNING_CONTEXT_PROMPT, dup_video=auto_dup_video
+                                    )
                                 else:
-                                    prod = pick_weighted_product_app(prods_text_only)
+                                    prod = pick_weighted_product_global(prods_text_only, ready_prods)
+                                    main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
+                                        "text", prod, direct_to_main, vibe, WINNING_CONTEXT_PROMPT, dup_video=auto_dup_video
+                                    )
 
-                                    if direct_to_main:
-                                        pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
-                                        prompt_a = (
-                                            f"Tulis 1 postingan teks Threads tentang produk: '{prod['product_name']}'.\n"
-                                            f"Keunggulan: {prod.get('highlight', '')}. Vibe: {resolve_style_desc(sel_ai_style_ap)}.\n"
-                                            f"{winning_context_prompt}\n"
-                                            f"ATURAN KHUSUS:\n"
-                                            f"1. {pos_rule}\n"
-                                            f"2. Tulis placeholder persis: '[LINK_PRODUK]' (nanti sistem yang menempelkan link asli).\n"
-                                            f"3. DILARANG pakai label '[Teks Utama]' atau 'POV:'.\n"
-                                            f"4. Maksimal 260 karakter tanpa tanda kutip."
-                                        )
-                                        raw_out = call_gemini(prompt_a)
-                                        full_main_post = format_model_1_text(raw_out, prod["affiliate_link"])
-                                        new_rows.append([today_str, slot_time, acc_target, full_main_post, "", "", prod["affiliate_link"], "PENDING", "", "", "", ""])
-                                    else:
-                                        chosen_hook = random.choice(VIRAL_HOOK_PATTERNS)
-                                        prompt_a = (
-                                            f"Tulis 1 postingan Threads bahasa Indonesia rekomendasi teks tanpa media untuk produk: '{prod['product_name']}' "
-                                            f"(Keunggulan: {prod.get('highlight', '')}).\n"
-                                            f"- Formula Hook: {chosen_hook}\n"
-                                            f"{winning_context_prompt}\n"
-                                            f"- {style_desc}\n- {len_desc}\n{PROMPT_RULES_CLEAN}\n"
-                                            f"Ingat: Baris 1 WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 emoji pemantik rasa penasaran dalam 1-3 detik. Langsung tulis tanpa tanda kutip."
-                                        )
-                                        main_txt = call_gemini(prompt_a)
-                                        clean_main_txt = sanitize_threads_text(main_txt)
-                                        act_rep_count = resolve_reply_count(sel_reply_mode_ap)
-                                        replies_chain = generate_affiliate_replies(prod['product_name'], prod.get('highlight', ''), prod['affiliate_link'], act_rep_count)
+                                new_rows.append([
+                                    today_str, slot_time, acc_target, main_t, med_t, rep_t, lnk_t, "PENDING", "", "", "", ""
+                                ])
 
-                                        new_rows.append([today_str, slot_time, acc_target, clean_main_txt, "", "\n---REPLY---\n".join(replies_chain), prod["affiliate_link"], "PENDING", "", "", "", ""])
-
-                        for r in new_rows:
-                            data_ws.append_row(r)
+                        if new_rows:
+                            try:
+                                data_ws.append_rows(new_rows)
+                            except Exception:
+                                for r in new_rows:
+                                    data_ws.append_row(r)
 
                         st.cache_data.clear()
-                        st.success(f"🎉 Berhasil membuat {len(new_rows)} antrean postingan ber-hook viral (Model 1 & 2 terpadu)!")
+                        st.success(f"🎉 Berhasil membuat {len(new_rows)} antrean postingan (Model 1 & 2 sesuai gaya worker.py)!")
                         st.rerun()
                 except Exception as ex:
                     st.error(f"Terjadi kesalahan: {ex}")
@@ -1119,11 +1122,7 @@ with tabs[1]:
         prod_hijack_options = ["-- Biarkan AI Memilih Otomatis yang Paling Cocok --"] + [p["product_name"] for p in all_ready_p]
         sel_hj_prod = st.selectbox("Pilih Produk Solusi dari Katalog:", prod_hijack_options)
     with col_hp2:
-        hj_style = st.selectbox("Gaya Bahasa Nimbrung:", [
-            "Curhat Relate & Nimbrung Santai (Khas Warganet Threads)",
-            "Plot Twist & Pengalaman Pribadi (Dulu sama, sekarang beres)",
-            "Spill Santai Solutif (Bocor Alus)"
-        ])
+        hj_style = st.selectbox("Gaya Bahasa / Vibe Nimbrung:", THREADS_VIBES)
 
     if st.button("✨ Racik Balasan Nimbrung via AI", type="primary"):
         if not viral_url_input or not resolved_post_id:
@@ -1153,26 +1152,24 @@ with tabs[1]:
                     p_media = str(target_prod.get("media_url", "")).strip()
 
                     prompt_hijack = (
-                        f"Tulis 1 komentar balasan Threads untuk nimbrung di postingan viral yang membahas: '{viral_context_input}'.\n"
-                        f"Solusi yang kamu pakai: produk '{p_name}' (Keunggulan: {p_hl}).\n"
-                        f"Gaya: {hj_style}.\n"
-                        f"{PROMPT_RULES_CLEAN}\n"
-                        f"ATURAN WAJIB:\n"
-                        f"1. Seolah-olah kamu warganet biasa yang senasib dan relate.\n"
-                        f"2. Ceritakan bagaimana benda kecil ini menyelesaikan masalah itu tanpa terkesan jualan.\n"
-                        f"3. DILARANG sebut nama produk secara kaku (sebut 'alat ini', 'benda ini', atau 'printilan ini').\n"
-                        f"4. DILARANG sebutkan link atau kata 'yuk beli' di komentar ini.\n"
-                        f"Maksimal 180 karakter. Langsung tulis teks komentar tanpa tanda kutip."
+                        f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
+                        f"Tulis komentar balasan untuk nimbrung di postingan viral yang membahas: '{viral_context_input}'.\n"
+                        f"Solusi yang kamu pakai: {p_name} (Highlight: {p_hl}). Vibe: {hj_style}.\n{WINNING_CONTEXT_PROMPT}\n"
+                        f"ATURAN KOMENTAR UTAMA:\n"
+                        f"1. Seolah-olah kamu warganet biasa yang senasib dan relate, DILARANG pakai 'POV:' atau bahasa sales.\n"
+                        f"2. JANGAN taruh link di komentar utama. Maksimal 200 karakter.\n\n"
+                        f"ATURAN BALASAN CTA:\n"
+                        f"1. Tulis 1 kalimat singkat penarik klik lapak Shopee (anti-zonk, cari lapak original, atau heran harganya murah). Maksimal 110 karakter.\n\n"
+                        f"PENTING: Pisahkan HANYA dengan tanda pembatas '---REPLY_CTA---' tanpa label tambahan apapun!"
                     )
-                    main_comment = call_gemini(prompt_hijack)
+                    raw_hj = call_gemini(prompt_hijack)
+                    if "---REPLY_CTA---" in raw_hj:
+                        parts = raw_hj.split("---REPLY_CTA---", 1)
+                        main_comment, spill_intro = sanitize_threads_text(parts[0]), sanitize_threads_text(parts[1])
+                    else:
+                        main_comment = sanitize_threads_text(raw_hj)
+                        spill_intro = random.choice(FALLBACK_CTA_STARTERS)
 
-                    prompt_spill = (
-                        f"Tulis 1 baris balasan santai (maksimal 70 karakter) sebelum menyematkan link toko resmi pembelian '{p_name}'. "
-                        f"Contoh tema: buat yang nanya di DM beli dimana, atau info toko officialnya. Tanpa hashtag, tanpa link."
-                    )
-                    spill_intro = call_gemini(prompt_spill).strip().strip('"').strip("'")
-                    if not spill_intro or len(spill_intro) > 100:
-                        spill_intro = random.choice(CLOSING_NARRATIVES)
                     reply_link_post = f"{spill_intro}\n{p_link}"
 
                     st.session_state["hijack_draft"] = {
@@ -1289,16 +1286,16 @@ with tabs[2]:
                     st.error(f"Gagal menyimpan ke Sheets: {e}")
 
 # ==============================================================================
-# TAB 4: CONTENT STUDIO (MANUAL & AI)
+# TAB 4: CONTENT STUDIO (MANUAL & AI - MENDUKUNG MODEL 1 & MODEL 2 + GAYA WORKER)
 # ==============================================================================
 with tabs[3]:
     st.subheader("✍️ Content Studio (Pembuat Konten Manual & AI)")
-    st.caption("Pusat pembuatan postingan mandiri atau paket kombinasi harian dengan variasi hook viral 1-3 detik.")
+    st.caption("Pusat pembuatan postingan mandiri atau paket kombinasi harian dengan gaya posting worker.py (Model 1, Model 2 & AI Self-Learning).")
 
     if "manual_generated_posts" not in st.session_state:
         st.session_state["manual_generated_posts"] = []
 
-    st.write("#### ⚙️ 1. Pengaturan Jadwal & Frekuensi")
+    st.write("#### ⚙️ 1. Pengaturan Jadwal, Model & Frekuensi")
     c_set1, c_set2, c_set3, c_set4 = st.columns(4)
     with c_set1:
         target_account = st.selectbox("🎯 Target Akun Threads", ["-- Semua Akun (All Accounts) --"] + acc_names_all)
@@ -1311,14 +1308,28 @@ with tabs[3]:
 
     c_fmt1, c_fmt2 = st.columns(2)
     with c_fmt1:
-        manual_length_opt = st.selectbox("📏 Panjang Teks", ["Sedang (180-260 karakter)", "Pendek (max 140 karakter)", "Panjang (300-450 karakter)", "🎲 Acak Sesuai AI"])
+        studio_model_opt = st.selectbox(
+            "⚖️ Pilih Model Postingan (Model 1 vs Model 2):",
+            [
+                "🤖 Otomatis Sesuai Pengaturan Akun / AI Self-Learning",
+                "🔵 Model 1 Saja (Direct Link Fleksibel Awal/Tengah/Akhir di Post Utama)",
+                "⚪ Model 2 Saja (Post Utama + Link di Kolom Balasan)"
+            ]
+        )
     with c_fmt2:
-        manual_reply_mode = st.selectbox("💬 Rantai Balasan", ["1 Balasan (Hanya Link)", "2 Balasan (1 Cerita + Link)", "3 Balasan (2 Cerita + Link)", "🎲 Acak (1 - 3 Balasan)"])
+        copy_styles = ["Serahkan ke AI (Acak Vibe Threads)"] + THREADS_VIBES
+        studio_vibe_opt = st.selectbox("🎨 Vibe / Gaya Bahasa Threads:", copy_styles)
+
+    def resolve_studio_model(acc_name_check: str, slot_str: str) -> bool:
+        if "Model 1 Saja" in studio_model_opt:
+            return True
+        elif "Model 2 Saja" in studio_model_opt:
+            return False
+        check_acc = acc_names_all[0] if (acc_name_check == "-- Semua Akun (All Accounts) --" and acc_names_all) else acc_name_check
+        return decide_post_model_for_account(check_acc, cfg_data, slot_str, all_data, GLOBAL_MODEL_STATS)
 
     st.divider()
     content_mode = st.radio("Pilih Mode Konten:", ["🎯 Paket Kombinasi Harian (Video + Teks + Viral)", "🛍️ Single Product Affiliate", "🚀 Viral Booster", "✍️ Tulis Bebas Manual"], horizontal=True)
-
-    copy_styles = ["Serahkan ke AI", "Curhat Santai & Relate", "Storytelling Pengalaman Pribadi", "Review Jujur & Solutif", "Racun Belanja Shopee"]
 
     if content_mode == "🎯 Paket Kombinasi Harian (Video + Teks + Viral)":
         ck1, ck2, ck3 = st.columns(3)
@@ -1329,7 +1340,6 @@ with tabs[3]:
         with ck3:
             cb_viral = st.number_input("Jumlah Viral", 0, 50, min(max(3, 0), 50), key="cb_vi")
 
-        cb_style = st.selectbox("Gaya Bahasa AI:", copy_styles, key="cb_style")
         cb_dup_video = st.checkbox("🎬 Trik Thumbnail 2 Video (Carousel)", value=True, key="cb_dup")
 
         if st.button("✨ Generate Paket Kombinasi via AI", type="primary"):
@@ -1338,51 +1348,41 @@ with tabs[3]:
             tot_combo = cb_video + cb_text + cb_viral
 
             if tot_combo > 0:
-                with st.spinner(f"Meracik {tot_combo} postingan dengan variasi hook viral..."):
+                with st.spinner(f"Meracik {tot_combo} postingan dengan gaya worker.py (Model 1 & 2)..."):
                     base_dt = datetime.combine(schedule_d, schedule_t)
                     post_types = arrange_post_types_3way(cb_viral, cb_text, cb_video)
                     gen_list = []
 
-                    sampled_video = random.sample(prods_with_media, min(cb_video, len(prods_with_media))) if (cb_video > 0 and prods_with_media) else []
-                    sampled_text = random.sample(prods_text_only, min(cb_text, len(prods_text_only))) if (cb_text > 0 and prods_text_only) else []
-
-                    v_i, t_i = 0, 0
                     for idx_c, p_t in enumerate(post_types):
                         p_dt = base_dt + timedelta(minutes=idx_c * interval_mins)
-                        act_len = random.choice(["Pendek", "Sedang", "Panjang"]) if "Acak" in manual_length_opt else manual_length_opt
-                        len_desc = get_length_prompt_desc(act_len)
-                        style_desc = resolve_style_desc(cb_style)
+                        slot_str = p_dt.strftime("%H:%M")
+                        vibe_cur = resolve_vibe_desc(studio_vibe_opt)
+                        direct_to_main = resolve_studio_model(target_account, slot_str)
 
                         if p_t == "viral":
-                            sub_top, angle_top = get_random_dynamic_topic()
-                            prompt_v = f"Tulis 1 postingan Threads bahasa Indonesia tentang: '{sub_top}'. Sudut pandang: {angle_top}.\n{PROMPT_RULES_CLEAN}\n{len_desc}\nMaksimal 220 karakter tanpa kutip."
-                            v_txt = call_gemini(prompt_v)
-                            gen_list.append({"date": p_dt.strftime("%Y-%m-%d"), "time": p_dt.strftime("%H:%M"), "account": target_account, "main": v_txt, "media": "", "reply": "", "link": ""})
+                            main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
+                                "viral", {}, direct_to_main, vibe_cur, WINNING_CONTEXT_PROMPT, dup_video=cb_dup_video
+                            )
                         elif p_t == "video":
-                            p_cur = sampled_video[v_i] if v_i < len(sampled_video) else random.choice(all_ready_p)
-                            v_i += 1
-                            chosen_hook = random.choice(VIRAL_HOOK_PATTERNS)
-                            prompt_a = (
-                                f"Tulis 1 postingan Threads bahasa Indonesia penahan jempol (stop scrolling) penonton video untuk produk: '{p_cur['product_name']}' (Keunggulan: {p_cur.get('highlight', '')}).\n"
-                                f"- Formula Hook: {chosen_hook}\n- {style_desc}\n- {len_desc}\n{PROMPT_RULES_CLEAN}\n"
-                                f"Ingat: Baris 1 WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 emoji pemantik rasa penasaran dalam 1-3 detik. Langsung tulis teks tanpa tanda kutip."
+                            p_cur = pick_weighted_product_global(prods_with_media, all_ready_p)
+                            main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
+                                "video", p_cur, direct_to_main, vibe_cur, WINNING_CONTEXT_PROMPT, dup_video=cb_dup_video
                             )
-                            m_txt = call_gemini(prompt_a)
-                            replies = generate_affiliate_replies(p_cur['product_name'], p_cur.get('highlight', ''), p_cur['affiliate_link'], resolve_reply_count(manual_reply_mode))
-                            raw_m = str(p_cur.get("media_url", "")).strip()
-                            gen_list.append({"date": p_dt.strftime("%Y-%m-%d"), "time": p_dt.strftime("%H:%M"), "account": target_account, "main": m_txt, "media": prepare_media_for_post(raw_m, duplicate_single_video=cb_dup_video), "reply": "\n---REPLY---\n".join(replies), "link": p_cur["affiliate_link"]})
                         else:
-                            p_cur = sampled_text[t_i] if t_i < len(sampled_text) else random.choice(all_ready_p)
-                            t_i += 1
-                            chosen_hook = random.choice(VIRAL_HOOK_PATTERNS)
-                            prompt_a = (
-                                f"Tulis 1 postingan Threads bahasa Indonesia rekomendasi teks tanpa media untuk produk: '{p_cur['product_name']}' (Keunggulan: {p_cur.get('highlight', '')}).\n"
-                                f"- Formula Hook: {chosen_hook}\n- {style_desc}\n- {len_desc}\n{PROMPT_RULES_CLEAN}\n"
-                                f"Ingat: Baris 1 WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 emoji pemantik rasa penasaran dalam 1-3 detik. Langsung tulis teks tanpa tanda kutip."
+                            p_cur = pick_weighted_product_global(prods_text_only, all_ready_p)
+                            main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
+                                "text", p_cur, direct_to_main, vibe_cur, WINNING_CONTEXT_PROMPT, dup_video=cb_dup_video
                             )
-                            m_txt = call_gemini(prompt_a)
-                            replies = generate_affiliate_replies(p_cur['product_name'], p_cur.get('highlight', ''), p_cur['affiliate_link'], resolve_reply_count(manual_reply_mode))
-                            gen_list.append({"date": p_dt.strftime("%Y-%m-%d"), "time": p_dt.strftime("%H:%M"), "account": target_account, "main": m_txt, "media": "", "reply": "\n---REPLY---\n".join(replies), "link": p_cur["affiliate_link"]})
+
+                        gen_list.append({
+                            "date": p_dt.strftime("%Y-%m-%d"),
+                            "time": slot_str,
+                            "account": target_account,
+                            "main": main_t,
+                            "media": med_t,
+                            "reply": rep_t,
+                            "link": lnk_t
+                        })
 
                     st.session_state["manual_generated_posts"] = gen_list
                     st.success(f"🎉 Berhasil membuat {len(gen_list)} draf!")
@@ -1390,42 +1390,43 @@ with tabs[3]:
     elif content_mode == "🛍️ Single Product Affiliate":
         c_sp1, c_sp2 = st.columns(2)
         with c_sp1:
-            sel_sp = st.selectbox("Pilih Produk:", ["-- Acak dari Katalog READY --"] + [p["product_name"] for p in all_ready_p])
+            sel_sp = st.selectbox("Pilih Produk:", ["-- Acak Berbobot AI (Winning Products) --"] + [p["product_name"] for p in all_ready_p])
         with c_sp2:
-            sp_style = st.selectbox("Gaya Bahasa AI:", copy_styles, key="sp_style")
             sp_dup_v = st.checkbox("🎬 Trik Thumbnail 2 Video (Carousel)", value=True, key="sp_dup")
 
         if st.button("✨ Generate Single Product Post", type="primary"):
-            p_cur = random.choice(all_ready_p) if sel_sp == "-- Acak dari Katalog READY --" else next((p for p in all_ready_p if p["product_name"] == sel_sp), all_ready_p[0])
-            act_len = random.choice(["Pendek", "Sedang", "Panjang"]) if "Acak" in manual_length_opt else manual_length_opt
-            chosen_hook = random.choice(VIRAL_HOOK_PATTERNS)
-            prompt = (
-                f"Tulis 1 postingan Threads bahasa Indonesia penahan jempol (stop scrolling) untuk produk: '{p_cur['product_name']}' (Keunggulan: {p_cur.get('highlight', '')}).\n"
-                f"- Formula Hook: {chosen_hook}\n- {resolve_style_desc(sp_style)}\n- {get_length_prompt_desc(act_len)}\n{PROMPT_RULES_CLEAN}\n"
-                f"Baris 1 WAJIB 1 kalimat pendek HURUF KAPITAL + 1-2 emoji pemantik rasa penasaran dalam 1-3 detik. Langsung tulis teks tanpa tanda kutip."
+            p_cur = pick_weighted_product_global(all_ready_p, all_ready_p) if sel_sp == "-- Acak Berbobot AI (Winning Products) --" else next((p for p in all_ready_p if p["product_name"] == sel_sp), all_ready_p[0])
+            slot_str = schedule_t.strftime("%H:%M")
+            vibe_cur = resolve_vibe_desc(studio_vibe_opt)
+            direct_to_main = resolve_studio_model(target_account, slot_str)
+            has_media = bool(str(p_cur.get("media_url", "")).strip())
+
+            main_t, med_t, rep_t, lnk_t = build_post_by_worker_style(
+                "video" if has_media else "text", p_cur, direct_to_main, vibe_cur, WINNING_CONTEXT_PROMPT, dup_video=sp_dup_v
             )
-            m_txt = call_gemini(prompt)
-            replies = generate_affiliate_replies(p_cur['product_name'], p_cur.get('highlight', ''), p_cur['affiliate_link'], resolve_reply_count(manual_reply_mode))
-            raw_m = str(p_cur.get("media_url", "")).strip()
 
             st.session_state["manual_generated_posts"] = [{
                 "date": schedule_d.strftime("%Y-%m-%d"),
-                "time": schedule_t.strftime("%H:%M"),
+                "time": slot_str,
                 "account": target_account,
-                "main": m_txt,
-                "media": prepare_media_for_post(raw_m, duplicate_single_video=sp_dup_v),
-                "reply": "\n---REPLY---\n".join(replies),
-                "link": p_cur["affiliate_link"]
+                "main": main_t,
+                "media": med_t,
+                "reply": rep_t,
+                "link": lnk_t
             }]
-            st.success("🎉 Draf berhasil dibuat!")
+            st.success(f"🎉 Draf berhasil dibuat ({'Model 1 - Direct Link' if direct_to_main else 'Model 2 - Reply Link'})!")
 
     elif content_mode == "🚀 Viral Booster":
-        vb_topic = st.text_input("Topik (Kosongkan jika ingin acak otomatis):", placeholder="Misal: Etika membatalkan janji mendadak")
+        vb_topic = st.text_input("Topik (Kosongkan jika ingin acak otomatis sesuai VIRAL_OBSERVATIONS):", placeholder="Misal: Observasi kebiasaan orang Indonesia sehari-hari")
         if st.button("✨ Generate Postingan Viral", type="primary"):
-            sub_top, angle_top = (vb_topic, "Opini santai") if vb_topic.strip() else get_random_dynamic_topic()
-            act_len = random.choice(["Pendek", "Sedang", "Panjang"]) if "Acak" in manual_length_opt else manual_length_opt
-            prompt_v = f"Tulis 1 postingan Threads bahasa Indonesia tentang: '{sub_top}'. Sudut pandang: {angle_top}.\n{PROMPT_RULES_CLEAN}\n{get_length_prompt_desc(act_len)}\nMaksimal 220 karakter tanpa kutip."
-            v_txt = call_gemini(prompt_v)
+            topik = vb_topic.strip() if vb_topic.strip() else random.choice(VIRAL_OBSERVATIONS)
+            vibe_cur = resolve_vibe_desc(studio_vibe_opt)
+            prompt_v = (
+                f"Kamu adalah user Threads Indonesia yang santai dan relate.\n"
+                f"Tulis 1 postingan tentang: '{topik}'. Vibe: {vibe_cur}.\n{WINNING_CONTEXT_PROMPT}"
+                f"DILARANG pakai kata 'POV:' atau label apapun. Langsung tulis kalimat pembuka. Maksimal 220 karakter tanpa tanda kutip."
+            )
+            v_txt = sanitize_threads_text(call_gemini(prompt_v))
             st.session_state["manual_generated_posts"] = [{
                 "date": schedule_d.strftime("%Y-%m-%d"),
                 "time": schedule_t.strftime("%H:%M"),
@@ -1443,7 +1444,7 @@ with tabs[3]:
             man_main = st.text_area("Teks Utama", height=100)
             man_media = st.text_input("Media URL")
         with c_man2:
-            man_reply = st.text_area("Balasan (Pisahkan dengan ---REPLY---)", height=100)
+            man_reply = st.text_area("Balasan (Kosongkan jika Model 1 / Pisahkan dengan ---REPLY--- jika Model 2)", height=100)
             man_link = st.text_input("Link Shopee")
 
         if st.button("➕ Tambah Manual"):
@@ -1465,7 +1466,8 @@ with tabs[3]:
         st.write("#### 📝 Preview Antrean Draf")
         for idx_p, p_item in enumerate(posts_to_show):
             with st.container():
-                st.markdown(f"**📌 Post #{idx_p + 1} | `{p_item['date']} {p_item['time']}` | Target: `{p_item['account']}`**")
+                model_badge = "🔵 Model 1 (Direct)" if (p_item.get("link") and not p_item.get("reply")) else ("⚪ Model 2 (Reply)" if p_item.get("reply") else "🚀 Viral")
+                st.markdown(f"**📌 Post #{idx_p + 1} | `{p_item['date']} {p_item['time']}` | Target: `{p_item['account']}` | {model_badge}**")
                 col_box1, col_box2 = st.columns(2)
                 with col_box1:
                     p_item["main"] = st.text_area(f"Teks #{idx_p + 1}", value=p_item["main"], height=90, key=f"preview_main_{idx_p}")
@@ -1481,9 +1483,10 @@ with tabs[3]:
                 if sh_obj:
                     data_ws = sh_obj.worksheet("data")
                     accounts_to_save = acc_names_all if target_account == "-- Semua Akun (All Accounts) --" else [target_account]
+                    rows_to_append = []
                     for acc_name_single in accounts_to_save:
                         for itm in posts_to_show:
-                            data_ws.append_row([
+                            rows_to_append.append([
                                 itm["date"],
                                 itm["time"],
                                 acc_name_single,
@@ -1494,6 +1497,12 @@ with tabs[3]:
                                 "PENDING",
                                 "", "", "", ""
                             ])
+                    if rows_to_append:
+                        try:
+                            data_ws.append_rows(rows_to_append)
+                        except Exception:
+                            for r_item in rows_to_append:
+                                data_ws.append_row(r_item)
                     st.cache_data.clear()
                     st.success("🎉 Draf berhasil disimpan ke antrean!")
                     st.session_state["manual_generated_posts"] = []
@@ -1544,7 +1553,7 @@ with tabs[5]:
         st.write("##### 🤖 Tes Koneksi Gemini AI")
         if st.button("⚡ Tes Gemini"):
             try:
-                reply, model = call_gemini_core("Tes koneksi!")
+                reply, model = call_gemini_core("Tes koneksi singkat!")
                 st.success(f"✅ Terhubung ({model}): {reply}")
             except Exception as e:
                 st.error(f"❌ Gagal: {e}")
@@ -1674,7 +1683,7 @@ with tabs[6]:
         if selected_acc_filter != "@all_accounts (Semua)" and acc_col:
             df_filtered = df_filtered[df_filtered[acc_col].astype(str).str.strip() == selected_acc_filter]
 
-        if model_filter != "Semua Format":
+        if model_filter != "Semua Format" and reply_col:
             if model_filter == "Model 1 (Direct Link)":
                 df_filtered = df_filtered[df_filtered[reply_col].astype(str).str.strip().isin(["", "nan", "None"])]
             else:
