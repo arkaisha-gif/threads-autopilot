@@ -15,9 +15,9 @@ load_dotenv()
 
 TZ = pytz.timezone("Asia/Jakarta")
 
-# Karena jam 1-3 pagi belum ada jadwal publish, kapasitas buat draf dinaikkan agar tuntas sebelum jam 4 pagi
+# Kapasitas buat draf jam 1-3 pagi & batas publish tanpa rem (semua PENDING jatuh tempo langsung POSTED)
 MAX_DRAFTS_PER_RUN = 16
-MAX_PUBLISH_PER_RUN = 4
+MAX_PUBLISH_PER_RUN = 9999
 MAX_INSIGHTS_PER_RUN = 15
 
 # ==========================================
@@ -557,7 +557,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 
     # KUNCI WAKTU: Hanya meracik draf pada rentang jam 01:00 s/d 03:59 Pagi WIB
     if not (1 <= now_dt.hour < 4):
-        print(f"[AUTO-GEN] Waktu sekarang {now_dt.strftime('%H:%M')} WIB (Di luar jam 01:00-03:59 pagi). Mode fokus publish Sheet -> Threads.")
+        print(f"[AUTO-GEN] Waktu sekarang {now_dt.strftime('%H:%M')} WIB (Di luar jam 01:00-03:59 pagi). Mode fokus publish semua PENDING jatuh tempo.")
         return
 
     data_ws = sh.worksheet("data")
@@ -682,7 +682,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         if rem_count <= 0:
             continue
 
-        # Buat daftar jam utuh 1 hari (misal 04:30 s/d 23:45), lalu ambil mulai indeks ke-existing_cnt agar tidak pernah dobel
         acc_start_m = cfg_start_minutes + (acc_idx * 2)
         staggered_start = f"{acc_start_m // 60:02d}:{acc_start_m % 60:02d}"
         full_day_slots = generate_slots(posts_per_account, start_time_str=staggered_start, end_time_str=end_clock)
@@ -720,7 +719,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                     p_cur = pick_weighted_product(prods_with_media if prods_with_media else ready_prods)
 
                     if direct_to_main:
-                        # MODEL 1: Link fleksibel di awal/tengah/akhir main_text, reply_text KOSONG
                         pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
                         prompt = (
                             f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
@@ -739,7 +737,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                         acc_rows.append([today_str, slot_time, acc_name, full_main_post, media_formatted, "", p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
                     else:
-                        # MODEL 2: Tanpa link di main_text, Link ditaruh di reply_text
                         prompt = (
                             f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
                             f"Tulis postingan pengantar video untuk produk: {p_cur['product_name']}.\n"
@@ -845,7 +842,7 @@ def wait_for_container(container_id: str, access_token: str, max_wait: int = 75)
                 return False
         except Exception:
             pass
-        time.sleep(3)
+        time.sleep(2)
     return False
 
 def create_single_media_container(user_id: str, access_token: str, media_url: str, text: str = "", is_carousel_item: bool = False, reply_to_id: str = "") -> str:
@@ -921,12 +918,12 @@ def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: 
         r = requests.post(pub_url, data={"creation_id": container_id, "access_token": access_token}, timeout=25).json()
         if "id" in r:
             return r["id"]
-        time.sleep(3)
+        time.sleep(2)
 
     raise Exception("Gagal publish ke Threads")
 
 # ==========================================
-# RUNNER UTAMA (TIAP 30 MENIT)
+# RUNNER UTAMA (SEMUA PENDING JATUH TEMPO LANGSUNG POSTED)
 # ==========================================
 def run_worker():
     print(f"[{datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')} WIB] Memeriksa jadwal antrean...")
@@ -954,7 +951,7 @@ def run_worker():
     except Exception as e:
         print(f"[AUTO-GEN ERROR] {e}")
 
-    # Publish dari Sheet ke Threads jalan setiap siklus (tiap 30 menit)
+    # Publish SEMUA antrean PENDING yang sudah masuk waktunya tanpa berhenti
     data_ws = sh.worksheet("data")
     rows = data_ws.get_all_values()
     if len(rows) <= 1:
@@ -973,10 +970,6 @@ def run_worker():
     published_this_run = 0
 
     for idx, r in enumerate(rows[1:], start=2):
-        if published_this_run >= MAX_PUBLISH_PER_RUN:
-            print(f"[RUNNER] Mencapai batas {MAX_PUBLISH_PER_RUN} postingan per eksekusi 30 menit. Antrean berikutnya diproses pada jadwal selanjutnya.")
-            break
-
         while len(r) < 12:
             r.append("")
 
@@ -1007,6 +1000,7 @@ def run_worker():
         except Exception:
             continue
 
+        # Hanya terbitkan yang waktunya sudah tiba atau terlewat (<= sekarang)
         if p_dt > now_dt:
             continue
 
@@ -1028,7 +1022,7 @@ def run_worker():
             if reply_chain_text:
                 replies = [rep.strip() for rep in reply_chain_text.split("---REPLY---") if rep.strip()]
                 for rep_item in replies:
-                    time.sleep(2)
+                    time.sleep(1.5)
                     safe_reply = sanitize_threads_text(rep_item)
                     current_parent = publish_threads_post(u_id, tok, text=safe_reply, media_raw="", reply_to_id=current_parent)
 
@@ -1040,7 +1034,8 @@ def run_worker():
 
             already_posted_slots.add(slot_key)
             published_this_run += 1
-            print(f"[ROW {idx}] Sukses terbit: {main_id}")
+            print(f"[ROW {idx}] Sukses terbit: {main_id} (Total terbit run ini: {published_this_run})")
+            time.sleep(1)
 
         except Exception as ex:
             err_msg = str(ex)[:200]
@@ -1049,6 +1044,8 @@ def run_worker():
                 data_ws.update(range_name=f"H{idx}:J{idx}", values=err_vals)
             except TypeError:
                 data_ws.update(f"H{idx}:J{idx}", err_vals)
+
+    print(f"[RUNNER SELESAI] Total {published_this_run} antrean PENDING yang masuk waktunya berhasil diterbitkan!")
 
 if __name__ == "__main__":
     run_worker()
