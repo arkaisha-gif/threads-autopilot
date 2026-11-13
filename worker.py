@@ -15,8 +15,8 @@ load_dotenv()
 
 TZ = pytz.timezone("Asia/Jakarta")
 
-# Kapasitas buat draf jam 1-3 pagi & batas publish tanpa rem (semua PENDING jatuh tempo langsung POSTED)
-MAX_DRAFTS_PER_RUN = 16
+# Batas per akun dalam 1 siklus agar SEMUA AKUN kebagian secara adil & merata
+DRAFTS_PER_ACCOUNT_PER_CYCLE = 6
 MAX_PUBLISH_PER_RUN = 9999
 MAX_INSIGHTS_PER_RUN = 15
 
@@ -99,6 +99,27 @@ FALLBACK_CTA_STARTERS = [
     "Sumpah harganya gak masuk akal murahnya wkwk, cek sendiri di sini mumpung diskon:",
     "Buat yang males ribet dan butuh solusinya juga, link toko resminya aku taro sini ya:"
 ]
+
+# Template cadangan natural jika API Gemini tiba-tiba limit 429 di tengah jalan agar semua akun tetap dapat draf
+FALLBACK_MAIN_TEMPLATES = [
+    "Jujur baru sadar kalau urusan {name} tuh gak perlu dibikin ribet. Sejak ada alat yang {hl} ini, kerjaan rumah jadi beres cepet tanpa drama.",
+    "Dulu paling males kalau udah urusan {name}. Untung nemu printilan yang {hl}, beneran penyelamat kewarasan sehari-hari sih ini.",
+    "Kenapa ya baru tau sekarang kalau ada {name} yang {hl}? Padahal dari dulu butuh banget biar gak capek tenaga.",
+    "Definisi investasi receh paling kepake minggu ini: {name}. Bagian paling juara tuh karena {hl}, praktis banget."
+]
+
+def build_fallback_copy(p_cur: dict, direct_to_main: bool) -> tuple[str, str]:
+    name_clean = str(p_cur.get("product_name", "barang ini")).strip()
+    hl_clean = str(p_cur.get("highlight", "praktis dan awet dipakai")).strip()
+    if not hl_clean:
+        hl_clean = "bikin aktivitas jauh lebih praktis"
+    link = str(p_cur.get("affiliate_link", "")).strip()
+    base_txt = random.choice(FALLBACK_MAIN_TEMPLATES).format(name=name_clean, hl=hl_clean.lower())
+    if direct_to_main:
+        return sanitize_threads_text(f"{base_txt} Cek lapak aslinya di {link} mumpung masih promo."), ""
+    else:
+        cta = random.choice(FALLBACK_CTA_STARTERS)
+        return sanitize_threads_text(base_txt), f"{cta}\n{link}"
 
 def sanitize_threads_text(text: str, max_chars: int = 495) -> str:
     if not text:
@@ -265,7 +286,7 @@ def call_gemini(prompt: str) -> str:
                             break
 
                         if res.status_code in [503, 429]:
-                            time.sleep(3 * (attempt + 1))
+                            time.sleep(2 * (attempt + 1))
                             continue
                         break
                 except Exception as e:
@@ -549,16 +570,11 @@ def get_account_m1_ratio_pct(acc_name: str, cfg_data: dict, rows: list) -> float
     return m1_ratio
 
 # ==========================================
-# PEMBUATAN DRAF OTOMATIS (KHUSUS JAM 01:00 - 03:59 PAGI WIB)
+# PEMBUATAN DRAF OTOMATIS (MERATA KE SEMUA AKUN)
 # ==========================================
 def auto_generate_today_drafts_if_needed(sh, accounts_map):
     now_dt = datetime.now(TZ)
     today_str = now_dt.strftime("%Y-%m-%d")
-
-    # KUNCI WAKTU: Hanya meracik draf pada rentang jam 01:00 s/d 03:59 Pagi WIB
-    if not (1 <= now_dt.hour < 4):
-        print(f"[AUTO-GEN] Waktu sekarang {now_dt.strftime('%H:%M')} WIB (Di luar jam 01:00-03:59 pagi). Mode fokus publish semua PENDING jatuh tempo.")
-        return
 
     data_ws = sh.worksheet("data")
     existing_rows = data_ws.get_all_values()
@@ -596,18 +612,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         daily_video = 25
     posts_per_account = min(posts_per_account, 50)
 
-    learnings = extract_self_learning_patterns(existing_rows)
-    winning_copies = learnings["winning_copies"]
-    winning_products_map = learnings["winning_products"]
-
-    winning_context_prompt = ""
-    if winning_copies:
-        formatted_examples = "\n---\n".join(winning_copies[:2])
-        winning_context_prompt = (
-            f"\n[REFERENSI GAYA TULISAN ENGAGEMENT TERTINGGI]:\n{formatted_examples}\n"
-            f"(Tirulah ritme santainya tanpa menyalin kata per kata)\n"
-        )
-
     account_today_counts = {}
     existing_slot_keys = set()
 
@@ -622,20 +626,37 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                     account_today_counts[acc_key] = account_today_counts.get(acc_key, 0) + 1
                     existing_slot_keys.add((today_str, r_time, acc_key))
 
-    target_cfg_acc = cfg_data.get("target_autopilot_account", "-- Semua Akun (All Accounts) --").strip()
-    if target_cfg_acc != "-- Semua Akun (All Accounts) --" and target_cfg_acc in active_accounts:
-        candidate_accounts = [target_cfg_acc]
-    else:
-        candidate_accounts = active_accounts
-
+    # WAJIB PROSES SEMUA AKUN DI TAB ACCOUNTS (Agar tidak cuma reina.dailyneeds saja!)
     accounts_to_generate = [
-        acc for acc in candidate_accounts
+        acc for acc in active_accounts
         if account_today_counts.get(acc.lower(), 0) < posts_per_account
     ]
 
     if not accounts_to_generate:
-        print(f"[AUTO-GEN] Semua akun sudah memiliki draf lengkap ({posts_per_account} post) untuk {today_str}.")
+        print(f"[AUTO-GEN] Semua {len(active_accounts)} akun sudah memiliki draf lengkap ({posts_per_account} post) untuk {today_str}.")
         return
+
+    # Cek apakah sedang di jam 01:00 - 03:59 Pagi ATAU ada akun yang drafnya masih belum penuh hari ini
+    is_morning_window = (1 <= now_dt.hour < 4)
+    has_missing_accounts = any(account_today_counts.get(acc.lower(), 0) < posts_per_account for acc in active_accounts)
+
+    if not is_morning_window and not has_missing_accounts:
+        print(f"[AUTO-GEN] Waktu sekarang {now_dt.strftime('%H:%M')} WIB. Semua akun sudah siap.")
+        return
+
+    print(f"[AUTO-GEN] Ditemukan {len(accounts_to_generate)} akun yang belum penuh draf hari ini: {accounts_to_generate}")
+
+    learnings = extract_self_learning_patterns(existing_rows)
+    winning_copies = learnings["winning_copies"]
+    winning_products_map = learnings["winning_products"]
+
+    winning_context_prompt = ""
+    if winning_copies:
+        formatted_examples = "\n---\n".join(winning_copies[:2])
+        winning_context_prompt = (
+            f"\n[REFERENSI GAYA TULISAN ENGAGEMENT TERTINGGI]:\n{formatted_examples}\n"
+            f"(Tirulah ritme santainya tanpa menyalin kata per kata)\n"
+        )
 
     cfg_start_clock = cfg_data.get("start_time", "04:30")
     cfg_start_minutes = parse_time_str(cfg_start_clock)
@@ -669,13 +690,9 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         return random.choices(prod_list, weights=weights, k=1)[0]
 
     full_types_template = arrange_post_types_3way(daily_viral, daily_text, daily_video)
-    total_generated_this_run = 0
 
+    # LOOP MERATA KE SEMUA AKUN: Setiap akun dijamin dapat jatah pembuatan draf di siklus ini!
     for acc_idx, acc_name in enumerate(accounts_to_generate):
-        if total_generated_this_run >= MAX_DRAFTS_PER_RUN:
-            print(f"[AUTO-GEN] Batas batch ({MAX_DRAFTS_PER_RUN} draf) tercapai, sisa draf dilanjutkan pada siklus jam 1-3 pagi berikutnya.")
-            break
-
         acc_key = acc_name.lower()
         existing_cnt = account_today_counts.get(acc_key, 0)
         rem_count = posts_per_account - existing_cnt
@@ -689,12 +706,12 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         m1_pct = get_account_m1_ratio_pct(acc_name, cfg_data, existing_rows)
         full_models_template = arrange_post_models(posts_per_account, m1_pct)
 
-        batch_rem = min(rem_count, MAX_DRAFTS_PER_RUN - total_generated_this_run)
+        batch_rem = min(rem_count, DRAFTS_PER_ACCOUNT_PER_CYCLE)
         slots = full_day_slots[existing_cnt : existing_cnt + batch_rem]
         types_list = full_types_template[existing_cnt : existing_cnt + batch_rem]
         models_list = full_models_template[existing_cnt : existing_cnt + batch_rem]
 
-        print(f"[AUTO-GEN 01-03 AM] Meracik {batch_rem} post untuk @{acc_name} (Progress: {existing_cnt}/{posts_per_account} | Target Model 1: {m1_pct:.0f}%)...")
+        print(f"[AUTO-GEN] Meracik {batch_rem} post untuk @{acc_name} (Progress: {existing_cnt}/{posts_per_account} | Target Model 1: {m1_pct:.0f}%)...")
 
         acc_rows = []
         for slot_time, p_type, direct_to_main in zip(slots, types_list, models_list):
@@ -703,21 +720,26 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 
             vibe = random.choice(THREADS_VIBES)
 
-            try:
-                if p_type == "viral":
-                    topik = random.choice(VIRAL_OBSERVATIONS)
-                    prompt_v = (
-                        f"Kamu adalah user Threads Indonesia yang santai dan relate.\n"
-                        f"Tulis 1 postingan tentang: '{topik}'. Vibe: {vibe}.\n{winning_context_prompt}"
-                        f"DILARANG pakai kata 'POV:' atau label apapun. Langsung tulis kalimat pembuka. Maksimal 220 karakter tanpa tanda kutip."
-                    )
+            if p_type == "viral":
+                topik = random.choice(VIRAL_OBSERVATIONS)
+                prompt_v = (
+                    f"Kamu adalah user Threads Indonesia yang santai dan relate.\n"
+                    f"Tulis 1 postingan tentang: '{topik}'. Vibe: {vibe}.\n{winning_context_prompt}"
+                    f"DILARANG pakai kata 'POV:' atau label apapun. Langsung tulis kalimat pembuka. Maksimal 220 karakter tanpa tanda kutip."
+                )
+                try:
                     p_text = call_gemini(prompt_v)
                     clean_p_text = sanitize_threads_text(p_text)
-                    acc_rows.append([today_str, slot_time, acc_name, clean_p_text, "", "", "", "PENDING", "", "", "", ""])
+                except Exception as gen_err:
+                    print(f"   [GEMINI FALLBACK] Menggunakan teks cadangan untuk @{acc_name}: {gen_err}")
+                    clean_p_text = "Kadang hal sepele sehari-hari justru yang paling bikin mikir pas lagi rebahan tengah malem."
+                acc_rows.append([today_str, slot_time, acc_name, clean_p_text, "", "", "", "PENDING", "", "", "", ""])
 
-                elif p_type == "video":
-                    p_cur = pick_weighted_product(prods_with_media if prods_with_media else ready_prods)
+            elif p_type == "video":
+                p_cur = pick_weighted_product(prods_with_media if prods_with_media else ready_prods)
+                media_formatted = prepare_media_for_post(str(p_cur.get("media_url", "")).strip(), duplicate_single_video=True)
 
+                try:
                     if direct_to_main:
                         pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
                         prompt = (
@@ -732,10 +754,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                         )
                         raw_out = call_gemini(prompt)
                         full_main_post = format_model_1_text(raw_out, p_cur['affiliate_link'])
-
-                        media_formatted = prepare_media_for_post(str(p_cur.get("media_url", "")).strip(), duplicate_single_video=True)
                         acc_rows.append([today_str, slot_time, acc_name, full_main_post, media_formatted, "", p_cur['affiliate_link'], "PENDING", "", "", "", ""])
-
                     else:
                         prompt = (
                             f"Kamu adalah user Threads Indonesia yang santai, jujur, dan relate.\n"
@@ -758,11 +777,15 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                         clean_main_txt = sanitize_threads_text(main_txt)
                         clean_cta_txt = sanitize_threads_text(cta_txt)
                         aff_reply = f"{clean_cta_txt}\n{p_cur['affiliate_link']}"
-                        media_formatted = prepare_media_for_post(str(p_cur.get("media_url", "")).strip(), duplicate_single_video=True)
                         acc_rows.append([today_str, slot_time, acc_name, clean_main_txt, media_formatted, aff_reply, p_cur['affiliate_link'], "PENDING", "", "", "", ""])
+                except Exception as gen_err:
+                    print(f"   [GEMINI FALLBACK] Menyusun draf cadangan untuk @{acc_name}: {gen_err}")
+                    fb_main, fb_rep = build_fallback_copy(p_cur, direct_to_main)
+                    acc_rows.append([today_str, slot_time, acc_name, fb_main, media_formatted, fb_rep, p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
-                else:
-                    p_cur = pick_weighted_product(prods_text_only)
+            else:
+                p_cur = pick_weighted_product(prods_text_only)
+                try:
                     if direct_to_main:
                         pos_rule = random.choice(MODEL_1_POSITION_PROMPTS)
                         prompt = (
@@ -795,13 +818,13 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                         clean_cta_txt = sanitize_threads_text(cta_txt)
                         aff_reply = f"{clean_cta_txt}\n{p_cur['affiliate_link']}"
                         acc_rows.append([today_str, slot_time, acc_name, clean_main_txt, "", aff_reply, p_cur['affiliate_link'], "PENDING", "", "", "", ""])
+                except Exception as gen_err:
+                    print(f"   [GEMINI FALLBACK] Menyusun draf cadangan untuk @{acc_name}: {gen_err}")
+                    fb_main, fb_rep = build_fallback_copy(p_cur, direct_to_main)
+                    acc_rows.append([today_str, slot_time, acc_name, fb_main, "", fb_rep, p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
-                existing_slot_keys.add((today_str, slot_time, acc_key))
-                total_generated_this_run += 1
-                time.sleep(3)
-            except Exception as gen_err:
-                print(f"[AUTO-GEN SKIP] Gagal meracik 1 draf: {gen_err}")
-                break
+            existing_slot_keys.add((today_str, slot_time, acc_key))
+            time.sleep(2.5)
 
         if acc_rows:
             fresh_rows = data_ws.get_all_values()
@@ -818,7 +841,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
             if deduped_rows:
                 try:
                     data_ws.append_rows(deduped_rows)
-                    print(f"[AUTO-GEN] Berhasil menyimpan {len(deduped_rows)} baris unik untuk @{acc_name}!")
+                    print(f"[AUTO-GEN] ✅ Berhasil menyimpan {len(deduped_rows)} baris unik untuk @{acc_name}!")
                 except Exception as e_app:
                     print(f"[WARN] append_rows gagal ({e_app}), menyimpan baris per baris...")
                     for r_item in deduped_rows:
@@ -945,7 +968,7 @@ def run_worker():
     except Exception as e:
         print(f"[INSIGHTS WARN] {e}")
 
-    # Create Post otomatis HANYA jalan jika waktu antara jam 01:00 - 03:59 Pagi WIB
+    # Buat draf merata untuk SEMUA AKUN yang belum lengkap hari ini
     try:
         auto_generate_today_drafts_if_needed(sh, accounts_map)
     except Exception as e:
@@ -1000,7 +1023,6 @@ def run_worker():
         except Exception:
             continue
 
-        # Hanya terbitkan yang waktunya sudah tiba atau terlewat (<= sekarang)
         if p_dt > now_dt:
             continue
 
