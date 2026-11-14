@@ -2,15 +2,17 @@ name: Threads Autopilot Runner
 
 on:
   schedule:
-    # Cadangan otomatis jika suatu saat dibutuhkan
     - cron: '*/30 * * * *'
   workflow_dispatch:
+
+concurrency:
+  group: threads-autopilot-runner
+  cancel-in-progress: false
 
 jobs:
   run-worker:
     runs-on: ubuntu-latest
-    # 1 Run bertahan 3 jam (6 siklus x 30 menit), lalu otomatis menyalakan Run baru
-    timeout-minutes: 210
+    timeout-minutes: 15
 
     steps:
       - name: Checkout Repository
@@ -27,50 +29,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Worker Tiap 30 Menit (6 Siklus = 3 Jam Nonstop)
+      - name: Run Threads Worker (1x Jalan Langsung Selesai)
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GCP_CREDS_BASE64: ${{ secrets.GCP_CREDS_BASE64 }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           PYTHONUNBUFFERED: "1"
         run: |
-          for i in 1 2 3 4 5 6; do
-            echo "===================================================="
-            echo "🚀 MENJALANKAN SIKLUS KE-$i DARI 6 ($(date))"
-            echo "===================================================="
-            python worker.py || true
-            if [ $i -lt 6 ]; then
-              echo "⏳ Siklus ke-$i selesai. Menunggu 30 menit menuju siklus berikutnya..."
-              sleep 1800
-            fi
-          done
-
-      - name: Estafet Otomatis Nyalakan Run Berikutnya (Anti-Putus)
-        if: always()
-        env:
-          PAT_SECRET: ${{ secrets.GH_PAT }}
-        run: |
-          echo "Menyalakan Run estafet berikutnya secara otomatis..."
-          # Menggunakan secret GH_PAT jika ada, atau fallback langsung ke token PAT kamu
-          MY_TOKEN="${PAT_SECRET:-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}"
-          
-          # Deteksi otomatis ID workflow ini agar tidak peduli nama filenya cron.yml atau autopilot.yml
-          WF_ID=$(curl -s -H "Authorization: Bearer $MY_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            | python3 -c "import sys, json; print(json.load(sys.stdin).get('workflow_id', ''))")
-
-          if [ -n "$WF_ID" ]; then
-            STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $MY_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/$WF_ID/dispatches" \
-              -d '{"ref":"main"}')
-            echo "Respon GitHub API Dispatch (Workflow ID $WF_ID): HTTP $STATUS_CODE"
-          else
-            # Fallback tembak ke autopilot.yml dan cron.yml sekaligus
-            curl -s -X POST -H "Authorization: Bearer $MY_TOKEN" -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/autopilot.yml/dispatches" -d '{"ref":"main"}'
-            curl -s -X POST -H "Authorization: Bearer $MY_TOKEN" -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/cron.yml/dispatches" -d '{"ref":"main"}'
-          fi
+          python worker.py
