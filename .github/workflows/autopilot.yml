@@ -1,14 +1,7 @@
 name: Threads Autopilot Runner
 
 on:
-  schedule:
-    # Menit ke-17 setiap jam (menghindari tabrakan antrean global menit ke-00)
-    - cron: '17 * * * *'
   workflow_dispatch:
-
-concurrency:
-  group: threads-autopilot-runner
-  cancel-in-progress: false
 
 jobs:
   run-worker:
@@ -30,7 +23,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Threads Worker (1x Jalan Langsung Selesai)
+      - name: Run Threads Worker
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GCP_CREDS_BASE64: ${{ secrets.GCP_CREDS_BASE64 }}
