@@ -15,10 +15,9 @@ load_dotenv()
 
 TZ = pytz.timezone("Asia/Jakarta")
 
-# Batas per akun dalam 1 siklus agar SEMUA AKUN kebagian secara adil & merata
-DRAFTS_PER_ACCOUNT_PER_CYCLE = 6
-MAX_PUBLISH_PER_RUN = 9999
-MAX_INSIGHTS_PER_RUN = 15
+# Kapasitas buat draf khusus jam 01:00 - 03:59 pagi WIB
+DRAFTS_PER_ACCOUNT_PER_CYCLE = 7
+MAX_INSIGHTS_PER_RUN = 12
 
 # ==========================================
 # PENGAMBILAN KREDENSIAL & SECRETS
@@ -71,7 +70,6 @@ VIRAL_OBSERVATIONS = [
     "Opini santai tentang hal yang sering diromantisasi padahal aslinya melelahkan."
 ]
 
-# Variasi posisi link & CTA luwes untuk Model 1 (1 Post - Tanpa Reply)
 MODEL_1_POSITION_PROMPTS = [
     (
         "POSISI LINK: AWAL KALIMAT.\n"
@@ -100,7 +98,6 @@ FALLBACK_CTA_STARTERS = [
     "Buat yang males ribet dan butuh solusinya juga, link toko resminya aku taro sini ya:"
 ]
 
-# Template cadangan natural jika API Gemini tiba-tiba limit 429 di tengah jalan agar semua akun tetap dapat draf
 FALLBACK_MAIN_TEMPLATES = [
     "Jujur baru sadar kalau urusan {name} tuh gak perlu dibikin ribet. Sejak ada alat yang {hl} ini, kerjaan rumah jadi beres cepet tanpa drama.",
     "Dulu paling males kalau udah urusan {name}. Untung nemu printilan yang {hl}, beneran penyelamat kewarasan sehari-hari sih ini.",
@@ -166,7 +163,7 @@ def _safe_float(val) -> float:
         return 0.0
 
 # ==========================================
-# GEMINI API ENGINE (FILTER TEKS MURNI GEMINI 3 + BLACKLIST OTOMATIS)
+# GEMINI API ENGINE (DEDUP MODEL + FAST SKIP SAAT 429)
 # ==========================================
 CACHED_MODEL_LIST = None
 DEAD_MODELS = set()
@@ -174,7 +171,7 @@ DEAD_MODELS = set()
 BLACKLIST_KEYWORDS = [
     "tts", "audio", "image", "imagen", "veo", "vision", "embedding",
     "aqa", "robotics", "computer-use", "thinking", "bisect", "learnlm",
-    "1.5", "2.0", "2.5-flash", "2.5-pro"
+    "transcribe", "1.5", "2.0", "2.5-flash", "2.5-pro"
 ]
 
 def is_valid_text_model(name: str) -> bool:
@@ -192,7 +189,7 @@ def get_available_models(key: str) -> list:
         return [m for m in CACHED_MODEL_LIST if m[1] not in DEAD_MODELS]
 
     available = []
-    seen = set()
+    seen_names = set()
     for ver in ["v1beta", "v1"]:
         url = f"https://generativelanguage.googleapis.com/{ver}/models?key={key}"
         try:
@@ -203,8 +200,8 @@ def get_available_models(key: str) -> list:
                     methods = m.get("supportedGenerationMethods", [])
                     if "generateContent" in methods:
                         clean_name = m["name"].replace("models/", "")
-                        if is_valid_text_model(clean_name) and (ver, clean_name) not in seen:
-                            seen.add((ver, clean_name))
+                        if is_valid_text_model(clean_name) and clean_name not in seen_names:
+                            seen_names.add(clean_name)
                             available.append((ver, clean_name))
         except Exception:
             pass
@@ -212,14 +209,14 @@ def get_available_models(key: str) -> list:
     preferred_order = [
         "gemini-3.8-flash",
         "gemini-3.0-flash",
+        "gemini-3-flash-preview",
         "gemini-3-flash",
         "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
         "gemini-3.1-pro",
-        "gemini-3.8-pro",
-        "gemini-3.0-pro",
-        "gemini-3",
-        "gemma-3-27b-it",
-        "gemma-3"
+        "gemma-3-27b-it"
     ]
     def rank_model(item):
         _, name = item
@@ -234,12 +231,12 @@ def get_available_models(key: str) -> list:
     if not available:
         available = [
             ("v1beta", "gemini-3.8-flash"),
-            ("v1beta", "gemini-3.1-pro-preview"),
-            ("v1beta", "gemini-3.0-flash"),
+            ("v1beta", "gemini-3-flash-preview"),
+            ("v1beta", "gemini-3.1-flash-lite-preview"),
             ("v1beta", "gemma-3-27b-it")
         ]
 
-    CACHED_MODEL_LIST = available
+    CACHED_MODEL_LIST = available[:8]
     print(f"[GEMINI DISCOVERY] Model teks aktif: {[m[1] for m in CACHED_MODEL_LIST]}")
     return [m for m in CACHED_MODEL_LIST if m[1] not in DEAD_MODELS]
 
@@ -266,32 +263,25 @@ def call_gemini(prompt: str) -> str:
             url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_name}:generateContent?key={key}"
             headers = {"Content-Type": "application/json"}
 
-            for attempt in range(2):
-                try:
-                    res = requests.post(url, headers=headers, json=payload, timeout=25)
-                    if res.status_code == 200:
-                        data = res.json()
-                        if "candidates" in data and data["candidates"]:
-                            text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                            if text_out:
-                                return text_out
-                    else:
-                        err_json = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
-                        err_msg = err_json.get("error", {}).get("message", res.text[:120])
-                        print(f"   [GEMINI DEBUG] Key #{key_idx} | {m_name} (HTTP {res.status_code}): {err_msg[:90]}")
-                        last_errors.append(f"{m_name} (HTTP {res.status_code}: {err_msg[:80]})")
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=20)
+                if res.status_code == 200:
+                    data = res.json()
+                    if "candidates" in data and data["candidates"]:
+                        text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        if text_out:
+                            return text_out
+                else:
+                    err_json = res.json() if "application/json" in res.headers.get("Content-Type", "") else {}
+                    err_msg = err_json.get("error", {}).get("message", res.text[:120])
+                    last_errors.append(f"{m_name} (HTTP {res.status_code})")
 
-                        if res.status_code == 404 or "limit: 0" in err_msg:
-                            DEAD_MODELS.add(m_name)
-                            break
-
-                        if res.status_code in [503, 429]:
-                            time.sleep(2 * (attempt + 1))
-                            continue
-                        break
-                except Exception as e:
-                    last_errors.append(f"{m_name} Network Error: {str(e)[:80]}")
-                    time.sleep(1)
+                    if res.status_code in [404, 429]:
+                        DEAD_MODELS.add(m_name)
+                    continue
+            except Exception as e:
+                last_errors.append(f"{m_name} Network Error: {str(e)[:60]}")
+                continue
 
     err_summary = " | ".join(last_errors[-2:]) if last_errors else "Request gagal"
     raise Exception(f"Google API Menolak Permintaan -> {err_summary}")
@@ -570,7 +560,7 @@ def get_account_m1_ratio_pct(acc_name: str, cfg_data: dict, rows: list) -> float
     return m1_ratio
 
 # ==========================================
-# PEMBUATAN DRAF OTOMATIS (MERATA KE SEMUA AKUN)
+# PEMBUATAN DRAF OTOMATIS (JAM 01-03 PAGI + DARURAT JIKA DRAF HARI INI 0)
 # ==========================================
 def auto_generate_today_drafts_if_needed(sh, accounts_map):
     now_dt = datetime.now(TZ)
@@ -599,19 +589,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     except Exception:
         pass
 
-    try:
-        daily_viral = int(cfg_data.get("daily_viral_count", cfg_data.get("count_viral", 0)))
-        daily_text = int(cfg_data.get("daily_text_count", cfg_data.get("count_aff_text", 0)))
-        daily_video = int(cfg_data.get("daily_video_count", cfg_data.get("count_aff_media", 25)))
-    except Exception:
-        daily_viral, daily_text, daily_video = 0, 0, 25
-
-    posts_per_account = daily_viral + daily_text + daily_video
-    if posts_per_account <= 0:
-        posts_per_account = 25
-        daily_video = 25
-    posts_per_account = min(posts_per_account, 50)
-
     account_today_counts = {}
     existing_slot_keys = set()
 
@@ -626,25 +603,38 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                     account_today_counts[acc_key] = account_today_counts.get(acc_key, 0) + 1
                     existing_slot_keys.add((today_str, r_time, acc_key))
 
-    # WAJIB PROSES SEMUA AKUN DI TAB ACCOUNTS (Agar tidak cuma reina.dailyneeds saja!)
-    accounts_to_generate = [
-        acc for acc in active_accounts
-        if account_today_counts.get(acc.lower(), 0) < posts_per_account
-    ]
+    is_morning_window = (1 <= now_dt.hour < 4)
+    # Cek apakah ada akun yang draf hari ininya BENAR-BENAR KOSONG (0 post)
+    empty_accounts = [acc for acc in active_accounts if account_today_counts.get(acc.lower(), 0) == 0]
+
+    if not is_morning_window and not empty_accounts:
+        print(f"[AUTO-GEN] Jam {now_dt.strftime('%H:%M')} WIB & semua akun sudah punya draf hari ini. Langsung fokus publish.")
+        return
+
+    try:
+        daily_viral = int(cfg_data.get("daily_viral_count", cfg_data.get("count_viral", 0)))
+        daily_text = int(cfg_data.get("daily_text_count", cfg_data.get("count_aff_text", 0)))
+        daily_video = int(cfg_data.get("daily_video_count", cfg_data.get("count_aff_media", 25)))
+    except Exception:
+        daily_viral, daily_text, daily_video = 0, 0, 25
+
+    posts_per_account = daily_viral + daily_text + daily_video
+    if posts_per_account <= 0:
+        posts_per_account = 25
+        daily_video = 25
+    posts_per_account = min(posts_per_account, 50)
+
+    if is_morning_window:
+        accounts_to_generate = [
+            acc for acc in active_accounts
+            if account_today_counts.get(acc.lower(), 0) < posts_per_account
+        ]
+    else:
+        accounts_to_generate = empty_accounts
+        print(f"[AUTO-GEN DARURAT] Terdeteksi {len(empty_accounts)} akun masih 0 draf hari ini: {empty_accounts}. Membuat paket darurat mulai jam sekarang...")
 
     if not accounts_to_generate:
-        print(f"[AUTO-GEN] Semua {len(active_accounts)} akun sudah memiliki draf lengkap ({posts_per_account} post) untuk {today_str}.")
         return
-
-    # Cek apakah sedang di jam 01:00 - 03:59 Pagi ATAU ada akun yang drafnya masih belum penuh hari ini
-    is_morning_window = (1 <= now_dt.hour < 4)
-    has_missing_accounts = any(account_today_counts.get(acc.lower(), 0) < posts_per_account for acc in active_accounts)
-
-    if not is_morning_window and not has_missing_accounts:
-        print(f"[AUTO-GEN] Waktu sekarang {now_dt.strftime('%H:%M')} WIB. Semua akun sudah siap.")
-        return
-
-    print(f"[AUTO-GEN] Ditemukan {len(accounts_to_generate)} akun yang belum penuh draf hari ini: {accounts_to_generate}")
 
     learnings = extract_self_learning_patterns(existing_rows)
     winning_copies = learnings["winning_copies"]
@@ -661,6 +651,8 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
     cfg_start_clock = cfg_data.get("start_time", "04:30")
     cfg_start_minutes = parse_time_str(cfg_start_clock)
     end_clock = cfg_data.get("end_time", "23:45")
+    end_minutes = parse_time_str(end_clock)
+    now_minutes = now_dt.hour * 60 + now_dt.minute
 
     prod_ws = sh.worksheet("Products")
     all_prods = prod_ws.get_all_records()
@@ -691,7 +683,6 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 
     full_types_template = arrange_post_types_3way(daily_viral, daily_text, daily_video)
 
-    # LOOP MERATA KE SEMUA AKUN: Setiap akun dijamin dapat jatah pembuatan draf di siklus ini!
     for acc_idx, acc_name in enumerate(accounts_to_generate):
         acc_key = acc_name.lower()
         existing_cnt = account_today_counts.get(acc_key, 0)
@@ -699,19 +690,30 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
         if rem_count <= 0:
             continue
 
-        acc_start_m = cfg_start_minutes + (acc_idx * 2)
-        staggered_start = f"{acc_start_m // 60:02d}:{acc_start_m % 60:02d}"
-        full_day_slots = generate_slots(posts_per_account, start_time_str=staggered_start, end_time_str=end_clock)
-
         m1_pct = get_account_m1_ratio_pct(acc_name, cfg_data, existing_rows)
-        full_models_template = arrange_post_models(posts_per_account, m1_pct)
 
-        batch_rem = min(rem_count, DRAFTS_PER_ACCOUNT_PER_CYCLE)
-        slots = full_day_slots[existing_cnt : existing_cnt + batch_rem]
-        types_list = full_types_template[existing_cnt : existing_cnt + batch_rem]
-        models_list = full_models_template[existing_cnt : existing_cnt + batch_rem]
+        if is_morning_window:
+            acc_start_m = cfg_start_minutes + (acc_idx * 2)
+            staggered_start = f"{acc_start_m // 60:02d}:{acc_start_m % 60:02d}"
+            full_day_slots = generate_slots(posts_per_account, start_time_str=staggered_start, end_time_str=end_clock)
+            full_models_template = arrange_post_models(posts_per_account, m1_pct)
 
-        print(f"[AUTO-GEN] Meracik {batch_rem} post untuk @{acc_name} (Progress: {existing_cnt}/{posts_per_account} | Target Model 1: {m1_pct:.0f}%)...")
+            batch_rem = min(rem_count, DRAFTS_PER_ACCOUNT_PER_CYCLE)
+            slots = full_day_slots[existing_cnt : existing_cnt + batch_rem]
+            types_list = full_types_template[existing_cnt : existing_cnt + batch_rem]
+            models_list = full_models_template[existing_cnt : existing_cnt + batch_rem]
+        else:
+            rem_hours = max(1, (end_minutes - now_minutes) // 60)
+            emergency_quota = min(posts_per_account, max(2, min(6, rem_hours)))
+            start_em_m = min(now_minutes, end_minutes - 5)
+            staggered_start = f"{start_em_m // 60:02d}:{start_em_m % 60:02d}"
+
+            slots = generate_slots(emergency_quota, start_time_str=staggered_start, end_time_str=end_clock)
+            types_list = full_types_template[:emergency_quota]
+            models_list = arrange_post_models(emergency_quota, m1_pct)
+            batch_rem = len(slots)
+
+        print(f"[AUTO-GEN] Meracik {batch_rem} post untuk @{acc_name} (Target Model 1: {m1_pct:.0f}%)...")
 
         acc_rows = []
         for slot_time, p_type, direct_to_main in zip(slots, types_list, models_list):
@@ -730,8 +732,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                 try:
                     p_text = call_gemini(prompt_v)
                     clean_p_text = sanitize_threads_text(p_text)
-                except Exception as gen_err:
-                    print(f"   [GEMINI FALLBACK] Menggunakan teks cadangan untuk @{acc_name}: {gen_err}")
+                except Exception:
                     clean_p_text = "Kadang hal sepele sehari-hari justru yang paling bikin mikir pas lagi rebahan tengah malem."
                 acc_rows.append([today_str, slot_time, acc_name, clean_p_text, "", "", "", "PENDING", "", "", "", ""])
 
@@ -778,8 +779,7 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                         clean_cta_txt = sanitize_threads_text(cta_txt)
                         aff_reply = f"{clean_cta_txt}\n{p_cur['affiliate_link']}"
                         acc_rows.append([today_str, slot_time, acc_name, clean_main_txt, media_formatted, aff_reply, p_cur['affiliate_link'], "PENDING", "", "", "", ""])
-                except Exception as gen_err:
-                    print(f"   [GEMINI FALLBACK] Menyusun draf cadangan untuk @{acc_name}: {gen_err}")
+                except Exception:
                     fb_main, fb_rep = build_fallback_copy(p_cur, direct_to_main)
                     acc_rows.append([today_str, slot_time, acc_name, fb_main, media_formatted, fb_rep, p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
@@ -818,13 +818,12 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
                         clean_cta_txt = sanitize_threads_text(cta_txt)
                         aff_reply = f"{clean_cta_txt}\n{p_cur['affiliate_link']}"
                         acc_rows.append([today_str, slot_time, acc_name, clean_main_txt, "", aff_reply, p_cur['affiliate_link'], "PENDING", "", "", "", ""])
-                except Exception as gen_err:
-                    print(f"   [GEMINI FALLBACK] Menyusun draf cadangan untuk @{acc_name}: {gen_err}")
+                except Exception:
                     fb_main, fb_rep = build_fallback_copy(p_cur, direct_to_main)
                     acc_rows.append([today_str, slot_time, acc_name, fb_main, "", fb_rep, p_cur['affiliate_link'], "PENDING", "", "", "", ""])
 
             existing_slot_keys.add((today_str, slot_time, acc_key))
-            time.sleep(2.5)
+            time.sleep(1.5)
 
         if acc_rows:
             fresh_rows = data_ws.get_all_values()
@@ -851,10 +850,10 @@ def auto_generate_today_drafts_if_needed(sh, accounts_map):
 # ==========================================
 # MODUL PUBLIKASI KE THREADS API
 # ==========================================
-def wait_for_container(container_id: str, access_token: str, max_wait: int = 75) -> bool:
+def wait_for_container(container_id: str, access_token: str, max_wait: int = 50) -> bool:
     url = f"https://graph.threads.net/v1.0/{container_id}?fields=status,error_message&access_token={access_token}"
     start = time.time()
-    time.sleep(2)
+    time.sleep(1.5)
     while time.time() - start < max_wait:
         try:
             res = requests.get(url, timeout=10).json()
@@ -888,7 +887,7 @@ def create_single_media_container(user_id: str, access_token: str, media_url: st
         if reply_to_id:
             params["reply_to_id"] = reply_to_id
 
-    res = requests.post(endpoint, data=params, timeout=25).json()
+    res = requests.post(endpoint, data=params, timeout=20).json()
     if "id" not in res:
         raise Exception(f"Gagal container: {res}")
     return res["id"]
@@ -914,7 +913,7 @@ def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: 
         if reply_to_id:
             car_params["reply_to_id"] = reply_to_id
 
-        car_res = requests.post(f"https://graph.threads.net/v1.0/{user_id}/threads", data=car_params, timeout=25).json()
+        car_res = requests.post(f"https://graph.threads.net/v1.0/{user_id}/threads", data=car_params, timeout=20).json()
         container_id = car_res.get("id")
         if not container_id or not wait_for_container(container_id, access_token):
             raise Exception("Carousel container gagal diproses")
@@ -933,12 +932,12 @@ def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: 
             text_params["reply_to_id"] = reply_to_id
         res = requests.post(f"https://graph.threads.net/v1.0/{user_id}/threads", data=text_params, timeout=20).json()
         container_id = res.get("id")
-        time.sleep(2)
+        time.sleep(1.5)
 
     pub_url = f"https://graph.threads.net/v1.0/{user_id}/threads_publish"
     for _ in range(4):
-        time.sleep(2)
-        r = requests.post(pub_url, data={"creation_id": container_id, "access_token": access_token}, timeout=25).json()
+        time.sleep(1.5)
+        r = requests.post(pub_url, data={"creation_id": container_id, "access_token": access_token}, timeout=20).json()
         if "id" in r:
             return r["id"]
         time.sleep(2)
@@ -946,7 +945,7 @@ def publish_threads_post(user_id: str, access_token: str, text: str, media_raw: 
     raise Exception("Gagal publish ke Threads")
 
 # ==========================================
-# RUNNER UTAMA (SEMUA PENDING JATUH TEMPO LANGSUNG POSTED)
+# RUNNER UTAMA (ROUND-ROBIN SEMUA AKUN + SEMUA PENDING JATUH TEMPO)
 # ==========================================
 def run_worker():
     print(f"[{datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')} WIB] Memeriksa jadwal antrean...")
@@ -968,13 +967,11 @@ def run_worker():
     except Exception as e:
         print(f"[INSIGHTS WARN] {e}")
 
-    # Buat draf merata untuk SEMUA AKUN yang belum lengkap hari ini
     try:
         auto_generate_today_drafts_if_needed(sh, accounts_map)
     except Exception as e:
         print(f"[AUTO-GEN ERROR] {e}")
 
-    # Publish SEMUA antrean PENDING yang sudah masuk waktunya tanpa berhenti
     data_ws = sh.worksheet("data")
     rows = data_ws.get_all_values()
     if len(rows) <= 1:
@@ -990,8 +987,8 @@ def run_worker():
             ))
 
     now_dt = datetime.now(TZ)
-    published_this_run = 0
 
+    due_by_account = {}
     for idx, r in enumerate(rows[1:], start=2):
         while len(r) < 12:
             r.append("")
@@ -1000,18 +997,14 @@ def run_worker():
         post_time = r[1].strip().replace("'", "")
         target_acc = r[2].strip()
         main_text = r[3].strip()
-        media_url = r[4].strip()
-        reply_chain_text = r[5].strip()
         status = r[7].strip().upper()
-        target_hijack_id = r[11].strip()
 
-        if status != "PENDING" or not main_text:
+        if status not in ["PENDING", "POSTING"] or not main_text:
             continue
 
         slot_key = (post_date, post_time, target_acc.lower())
         if slot_key in already_posted_slots:
             data_ws.update_cell(idx, 8, "SKIPPED_DUPLICATE")
-            print(f"[ROW {idx}] Dilewati karena jadwal {post_date} {post_time} (@{target_acc}) sudah pernah terbit.")
             continue
 
         try:
@@ -1026,10 +1019,36 @@ def run_worker():
         if p_dt > now_dt:
             continue
 
-        acc_info = accounts_map.get(target_acc)
-        if not acc_info:
+        if target_acc not in accounts_map:
             continue
 
+        due_by_account.setdefault(target_acc, []).append((idx, r))
+
+    interleaved_queue = []
+    acc_queues = list(due_by_account.values())
+    while any(acc_queues):
+        for q in acc_queues:
+            if q:
+                interleaved_queue.append(q.pop(0))
+
+    print(f"[RUNNER] Ditemukan {len(interleaved_queue)} antrean jatuh tempo lintas {len(due_by_account)} akun.")
+    published_this_run = 0
+
+    for idx, r in interleaved_queue:
+        post_date = r[0].strip().replace("'", "")
+        post_time = r[1].strip().replace("'", "")
+        target_acc = r[2].strip()
+        main_text = r[3].strip()
+        media_url = r[4].strip()
+        reply_chain_text = r[5].strip()
+        target_hijack_id = r[11].strip()
+
+        slot_key = (post_date, post_time, target_acc.lower())
+        if slot_key in already_posted_slots:
+            data_ws.update_cell(idx, 8, "SKIPPED_DUPLICATE")
+            continue
+
+        acc_info = accounts_map[target_acc]
         u_id = acc_info["user_id"]
         tok = acc_info["access_token"]
 
@@ -1057,7 +1076,6 @@ def run_worker():
             already_posted_slots.add(slot_key)
             published_this_run += 1
             print(f"[ROW {idx}] Sukses terbit: {main_id} (Total terbit run ini: {published_this_run})")
-            time.sleep(1)
 
         except Exception as ex:
             err_msg = str(ex)[:200]
@@ -1067,7 +1085,7 @@ def run_worker():
             except TypeError:
                 data_ws.update(f"H{idx}:J{idx}", err_vals)
 
-    print(f"[RUNNER SELESAI] Total {published_this_run} antrean PENDING yang masuk waktunya berhasil diterbitkan!")
+    print(f"[RUNNER SELESAI] Total {published_this_run} antrean PENDING berhasil diterbitkan!")
 
 if __name__ == "__main__":
     run_worker()
